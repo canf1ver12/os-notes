@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>05 CPU 排程 CPU Scheduling｜OS 課程筆記</title>
+  <link rel="stylesheet" href="../assets/fonts/fonts.css">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root=".." data-chapter="05-cpu-scheduling">
+  <header class="site-header">
+    <a class="brand" href="../index.html">OS notes</a>
+    <button class="menu-btn" id="menu-btn" type="button">章節</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="content">
+      <header class="chapter-head">
+        <p class="eyebrow">CHAPTER 05</p>
+        <h1>CPU 排程</h1>
+        <p class="en">CPU Scheduling</p>
+      </header>
+
+      <h2 id="key-points">本章重點</h2>
+      <div class="summary-box">
+        <ul>
+          <li>排程不會讓單一工作跑得更快，只能減少等待：scheduler 決定下一個給誰，dispatcher 負責真的換過去。</li>
+          <li>評估指標：CPU utilization、throughput、turnaround time、waiting time、response time，考試最常算後三個。</li>
+          <li>FCFS、SJF、SRTF、Round Robin、Priority 用同一題比較最清楚；SJF / SRTF 平均等待最短但會 starvation，用 aging 解決。</li>
+          <li>Multilevel queue 和 MLFQ 把 ready queue 拆成好幾條，MLFQ 讓 process 依行為在 queue 之間移動。</li>
+          <li>多處理器要考慮 common 或 per-core queue、load balancing、processor affinity 和 hardware threading；演算法可以用 deterministic modeling、queueing model（Little's formula）、模擬或實作來評估。</li>
+        </ul>
+      </div>
+
+      <h2 id="concepts">核心觀念</h2>
+
+      <h3>為什麼需要排程</h3>
+      <p>大部分 process 的行為是「用一下 CPU，等一下 I/O，再用一下 CPU」，一段連續使用 CPU 的時間叫做 CPU burst。當某個 process 去等 I/O，CPU 就空出來了，這時候 scheduler（排程器）要從 ready queue 裡挑一個接手，CPU 才不會閒著。</p>
+      <p>可以想成餐廳只有一個廚師，很多桌客人點餐。廚師要決定先做哪一桌，不同的決定方式會讓客人的等待時間差很多。</p>
+
+      <h3>Preemptive 與 Non-preemptive</h3>
+      <dl class="terms">
+        <dt>Non-preemptive（不可搶占）</dt>
+        <dd>一個 process 拿到 CPU 後，會一直用到它自己結束或去等 I/O，別人不能中途搶走。</dd>
+        <dt>Preemptive（可搶占）</dt>
+        <dd>作業系統可以在中途把 CPU 收回來交給別人，例如有更短的工作到了，或是 time slice 用完。</dd>
+      </dl>
+
+      <h3>什麼時候要做排程決定</h3>
+      <ol>
+        <li>running → waiting（例如去等 I/O）</li>
+        <li>running → ready（例如 interrupt、time slice 用完）</li>
+        <li>waiting → ready（例如 I/O 完成）</li>
+        <li>terminated</li>
+      </ol>
+      <p>只在 1 和 4 做決定的是 non-preemptive，其他情況也會換人的是 preemptive。現代 OS 幾乎都是 preemptive，但它會帶來 race condition：一個 process 改資料改到一半被搶走，另一個 process 讀到不一致的資料，kernel 自己的資料結構也一樣，這是第 06 章要處理的問題。</p>
+
+      <h3>Scheduler 與 Dispatcher</h3>
+      <ul>
+        <li><strong>Scheduler</strong>：決定下一個給誰。</li>
+        <li><strong>Dispatcher</strong>：執行換手的動作，包括 context switch、切回 user mode、跳到程式該繼續的位置。</li>
+        <li><strong>Dispatch latency</strong>：dispatcher 停下一個 process 再啟動另一個所花的時間，越短越好。</li>
+      </ul>
+      <p>Linux 可以用 <code>vmstat</code> 看每秒 context switch 的次數。</p>
+
+      <h3>評估指標</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>指標</th><th>意思</th><th>計算方式</th><th>希望</th></tr></thead>
+          <tbody>
+            <tr><td>CPU utilization</td><td>CPU 忙碌的比例</td><td>忙碌時間 ÷ 總時間</td><td>越高越好</td></tr>
+            <tr><td>Throughput</td><td>單位時間完成幾個 process</td><td>完成數量 ÷ 時間</td><td>越高越好</td></tr>
+            <tr><td>Turnaround time</td><td>從抵達到完成總共花多久</td><td>完成時間 − 抵達時間</td><td>越低越好</td></tr>
+            <tr><td>Waiting time</td><td>在 ready queue 裡排隊的總時間</td><td>turnaround − burst</td><td>越低越好</td></tr>
+            <tr><td>Response time</td><td>從抵達到<strong>第一次</strong>拿到 CPU</td><td>第一次執行時間 − 抵達時間</td><td>越低越好</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout warn">
+        <strong>常見錯誤</strong>
+        <p>waiting time 是「所有」在 ready queue 排隊的時間加總，被搶占後再回來排的時間也要算。最穩的算法是直接用 turnaround − burst，不要一段一段去加，比較不會漏。</p>
+      </div>
+
+      <h3>FCFS：先來先做</h3>
+      <p>First-Come, First-Served，誰先到誰先用，用一個 FIFO queue 就能實作，non-preemptive。</p>
+      <p>問題是 convoy effect（護航效應）：一個很長的工作排在前面，後面一堆短工作全部被卡住，就像超市結帳排在一台裝滿的推車後面，你只買一瓶水也要等。</p>
+
+      <h3>SJF：最短的先做</h3>
+      <p>Shortest-Job-First，每次挑 CPU burst 最短的，non-preemptive。它是為了解決 FCFS 的 convoy effect：短工作先做完離開，大家的平均等待時間就會下降。可以證明在所有 process 同時抵達時，SJF 的平均 waiting time 是最小的。</p>
+      <p>缺點有兩個：</p>
+      <ul>
+        <li><strong>不知道 burst 多長</strong>：實際上無法事先知道下一次 CPU burst，只能用過去的 burst 預測（常用 exponential averaging）。</li>
+        <li><strong>Starvation（飢餓）</strong>：長工作可能一直被插隊。</li>
+      </ul>
+
+      <h3>SRTF：剩下最短的先做</h3>
+      <p>Shortest-Remaining-Time-First，是 SJF 的 preemptive 版本。每當有新的 process 抵達，就比較「新來的 burst」和「正在跑的剩餘時間」，新來的比較短就搶過來。它解決了 SJF 的一個問題：短工作剛好在長工作開始後才抵達，在 SJF 下還是得等長工作做完。</p>
+
+      <h3>Round Robin：輪流做</h3>
+      <p>每個 process 一次最多只能用一個 time quantum（時間片，記作 q），用完就回到 queue 尾巴重新排，preemptive。它解決的是「互動感」：不管工作多長，每個人很快就能輪到一次，response time 很短。</p>
+      <ul>
+        <li>q 很大：每個 process 都在 q 內做完，等於 FCFS。</li>
+        <li>q 很小：輪得很快，但 context switch 次數暴增，overhead 變大。</li>
+        <li>經驗法則：大約 80% 的 CPU burst 應該比 q 短。</li>
+      </ul>
+
+      <h3>Priority 與 Aging</h3>
+      <p>每個 process 有一個優先權數字，先做優先權高的，可以是 preemptive 或 non-preemptive。SJF 其實就是「burst 越短優先權越高」的特例。</p>
+      <p>Priority scheduling 一樣會 starvation，解法是 aging（老化）：一個 process 等得越久，就慢慢提高它的優先權，最後一定輪得到。</p>
+
+      <h3>Multilevel Queue</h3>
+      <p>把 ready queue 拆成好幾條 subqueue，process 依類型被固定分到某一條，例如 foreground（互動型）和 background（批次型）。每條 queue 可以用自己的演算法（例如 foreground 用 RR、background 用 FCFS），queue 之間再排程：固定優先權（上面的 queue 空了才輪到下面，可能 starvation），或分配時間比例（例如 80% 給 foreground、20% 給 background）。缺點是 process 不能換 queue，不夠有彈性。</p>
+
+      <h3>MLFQ：多層回饋佇列</h3>
+      <p>Multilevel Feedback Queue 有好幾層 queue，上層優先權高、q 小，下層優先權低、q 大。規則大致是：</p>
+      <ol>
+        <li>新的 process 先放最上層。</li>
+        <li>把一整個 q 用完的 process，代表它很吃 CPU，往下降一層。</li>
+        <li>在 q 用完前就主動去等 I/O 的，代表它是互動型，留在原本那層。</li>
+        <li>每隔一段時間把所有 process 拉回最上層（priority boost），避免下層 starvation。</li>
+      </ol>
+      <p>它的厲害之處是不需要事先知道 burst 長度，而是「看你的行為」自動分類，達到類似 SJF 的效果。</p>
+
+      <p>典型例子有三層：</p>
+      <ul>
+        <li><strong>Q0</strong>：RR，quantum 8 ms</li>
+        <li><strong>Q1</strong>：RR，quantum 16 ms</li>
+        <li><strong>Q2</strong>：FCFS</li>
+      </ul>
+      <p>新 process 都從 Q0 開始，8 ms 內沒做完就降到 Q1，在 Q1 再用完 16 ms 還沒做完就降到 Q2。所以 burst 短的 process 很快在上層做完，長的會沉到下層用 FCFS 慢慢跑。</p>
+
+      <h3>Multiple-processor scheduling</h3>
+      <p>多處理器可以是 multicore CPU、multithreaded core、NUMA 系統，也可能是不同種類的核心（heterogeneous multiprocessing）。兩種做法：</p>
+      <dl class="terms">
+        <dt>Asymmetric multiprocessing</dt>
+        <dd>由一顆 master CPU 負責所有系統的事（包括排程、存取 kernel 資料），其他 CPU 只跑使用者程式。只有一顆碰 kernel 資料，很簡單；但 master 會成為瓶頸。</dd>
+        <dt>Symmetric multiprocessing（SMP）</dt>
+        <dd>每顆 CPU 自己排程。可以所有 CPU 共用一條 <strong>common ready queue</strong>（容易互相接手工作，但要上鎖避免兩顆 CPU 選到同一個 process，鎖會變成瓶頸），或每顆 CPU 有自己的 <strong>per-core run queue</strong>（現代 OS 最常見，不用搶鎖、cache 比較好用，但工作量可能不平均）。</dd>
+      </dl>
+      <p><strong>Load balancing</strong> 讓所有 CPU 的工作量平均，只有各自有 queue 的系統才需要：</p>
+      <ul>
+        <li><strong>Push migration</strong>：由一個 task 定期檢查，把忙的 CPU 上的 process 推給閒的。</li>
+        <li><strong>Pull migration</strong>：閒的 CPU 主動去忙的 CPU 拉工作過來。</li>
+      </ul>
+      <p><strong>Processor affinity</strong>：process 在某顆 CPU 上跑過，那顆的 cache 裡都是它的資料（warm cache）；搬到別顆就要重新 cache miss、慢慢載入（cold cache）。所以 OS 會盡量讓 process 留在同一顆 CPU：</p>
+      <ul>
+        <li><strong>Soft affinity</strong>：盡量留在同一顆，但不保證。</li>
+        <li><strong>Hard affinity</strong>：process 可以指定只能在哪些 CPU 上跑。</li>
+        <li><strong>NUMA</strong>：還要讓 process 跑在它記憶體所在的那顆 CPU 附近。</li>
+      </ul>
+      <p>注意 load balancing 會把 process 搬走，和 affinity 互相抵觸，要取平衡。</p>
+
+      <h3>Hardware threading</h3>
+      <p>CPU 存取記憶體時常常要等資料回來，這段時間叫 <strong>memory stall</strong>，核心其實閒著。解法是讓一個核心有兩個（或更多）hardware thread：一個在等記憶體時，馬上換另一個執行（Intel 叫 hyper-threading）。對 OS 來說，每個 hardware thread 都像一顆 logical CPU。</p>
+      <dl class="terms">
+        <dt>Coarse-grained multithreading</dt>
+        <dd>遇到 memory stall 這種長延遲事件才換 thread。換的時候要把 pipeline 裡做到一半的指令清掉（flush），成本高。</dd>
+        <dt>Fine-grained（interleaved）multithreading</dt>
+        <dd>在每個指令週期的邊界就切換，指令交錯著跑。需要硬體有額外的電路支援，但切換成本很小。</dd>
+      </dl>
+      <p>所以排程有兩層：OS 決定哪個軟體 thread 放到哪個 hardware thread（logical CPU）上；核心自己決定這一刻執行哪個 hardware thread。</p>
+
+      <h3>演算法的評估</h3>
+      <p>先決定目標，例如「在 response time 不超過 300 ms 的前提下，讓 CPU utilization 越高越好」，再用以下方法比較：</p>
+      <dl class="terms">
+        <dt>Deterministic modeling</dt>
+        <dd>拿一組固定的工作量，算出每個演算法的表現，就是我們在「實際例子」做的事。簡單快速，但結果只適用那組資料。</dd>
+        <dt>Queueing models</dt>
+        <dd>把系統看成由 CPU、I/O 裝置等 server 組成的網路，用機率分布描述到達和服務時間。最常用的是 <strong>Little's formula</strong>：n = λ × W，n 是平均排隊長度、λ 是平均到達速率、W 是平均等待時間。系統穩定時，進來的速度等於離開的速度，所以這個式子對任何排程演算法都成立。</dd>
+        <dt>Simulations</dt>
+        <dd>用程式模擬系統，輸入可以是隨機產生的分布，或從真實系統錄下來的 trace。比較準，但很花時間。</dd>
+        <dt>Implementation</dt>
+        <dd>直接實作在真的 OS 上測量，最準，但成本最高，而且使用者知道排程方式後可能改變行為。</dd>
+      </dl>
+
+      <h2 id="example">實際例子</h2>
+      <p>用同一組 process 跑四種演算法，比較最清楚。時間單位都是 ms。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Process</th><th class="num">Arrival time</th><th class="num">Burst time</th></tr></thead>
+          <tbody>
+            <tr><td>P1</td><td class="num">0</td><td class="num">8</td></tr>
+            <tr><td>P2</td><td class="num">1</td><td class="num">4</td></tr>
+            <tr><td>P3</td><td class="num">2</td><td class="num">9</td></tr>
+            <tr><td>P4</td><td class="num">3</td><td class="num">5</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>FCFS</h3>
+      <p class="gantt-label">甘特圖</p>
+      <div class="gantt" data-start="0">
+        <span class="seg p1" style="--len:8" data-t="8">P1</span>
+        <span class="seg p2" style="--len:4" data-t="12">P2</span>
+        <span class="seg p3" style="--len:9" data-t="21">P3</span>
+        <span class="seg p4" style="--len:5" data-t="26">P4</span>
+      </div>
+      <p>照抵達順序 P1 → P2 → P3 → P4。Waiting time：P1 = 0、P2 = 8 − 1 = 7、P3 = 12 − 2 = 10、P4 = 21 − 3 = 18，平均 = 35 ÷ 4 = <strong>8.75</strong>。</p>
+
+      <h3>SJF（non-preemptive）</h3>
+      <p class="gantt-label">甘特圖</p>
+      <div class="gantt" data-start="0">
+        <span class="seg p1" style="--len:8" data-t="8">P1</span>
+        <span class="seg p2" style="--len:4" data-t="12">P2</span>
+        <span class="seg p4" style="--len:5" data-t="17">P4</span>
+        <span class="seg p3" style="--len:9" data-t="26">P3</span>
+      </div>
+      <p>時間 0 只有 P1 到，只能先做 P1，而且不能中途搶。時間 8 時 P2(4)、P3(9)、P4(5) 都在排隊，挑最短的 P2，再來是 P4，最後 P3。Waiting time：P1 = 0、P2 = 7、P4 = 12 − 3 = 9、P3 = 17 − 2 = 15，平均 = 31 ÷ 4 = <strong>7.75</strong>。</p>
+
+      <h3>SRTF（preemptive）</h3>
+      <p class="gantt-label">甘特圖</p>
+      <div class="gantt" data-start="0">
+        <span class="seg p1" style="--len:1" data-t="1">P1</span>
+        <span class="seg p2" style="--len:4" data-t="5">P2</span>
+        <span class="seg p4" style="--len:5" data-t="10">P4</span>
+        <span class="seg p1" style="--len:7" data-t="17">P1</span>
+        <span class="seg p3" style="--len:9" data-t="26">P3</span>
+      </div>
+      <ol>
+        <li>t = 0：只有 P1，開始跑。</li>
+        <li>t = 1：P2 抵達，burst 4 &lt; P1 剩下的 7，P2 搶走 CPU。</li>
+        <li>t = 2、3：P3(9)、P4(5) 抵達，都沒有比 P2 剩下的短，P2 繼續。</li>
+        <li>t = 5：P2 做完。剩下 P1(7)、P3(9)、P4(5)，選 P4。</li>
+        <li>t = 10：P4 做完，選 P1(7)，最後 P3。</li>
+      </ol>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Process</th><th class="num">完成時間</th><th class="num">Turnaround</th><th class="num">Waiting</th><th class="num">Response</th></tr></thead>
+          <tbody>
+            <tr><td>P1</td><td class="num">17</td><td class="num">17 − 0 = 17</td><td class="num">17 − 8 = 9</td><td class="num">0</td></tr>
+            <tr><td>P2</td><td class="num">5</td><td class="num">5 − 1 = 4</td><td class="num">4 − 4 = 0</td><td class="num">0</td></tr>
+            <tr><td>P3</td><td class="num">26</td><td class="num">26 − 2 = 24</td><td class="num">24 − 9 = 15</td><td class="num">15</td></tr>
+            <tr><td>P4</td><td class="num">10</td><td class="num">10 − 3 = 7</td><td class="num">7 − 5 = 2</td><td class="num">2</td></tr>
+            <tr><th>平均</th><th class="num"></th><th class="num">13</th><th class="num">6.5</th><th class="num">4.25</th></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Round Robin（q = 4）</h3>
+      <p class="gantt-label">甘特圖</p>
+      <div class="gantt" data-start="0">
+        <span class="seg p1" style="--len:4" data-t="4">P1</span>
+        <span class="seg p2" style="--len:4" data-t="8">P2</span>
+        <span class="seg p3" style="--len:4" data-t="12">P3</span>
+        <span class="seg p4" style="--len:4" data-t="16">P4</span>
+        <span class="seg p1" style="--len:4" data-t="20">P1</span>
+        <span class="seg p3" style="--len:4" data-t="24">P3</span>
+        <span class="seg p4" style="--len:1" data-t="25">P4</span>
+        <span class="seg p3" style="--len:1" data-t="26">P3</span>
+      </div>
+      <ol>
+        <li>t = 0～4：P1 跑 4，剩 4。這段時間 P2、P3、P4 依序抵達排隊，P1 排到最後。queue：P2, P3, P4, P1。</li>
+        <li>t = 4～8：P2 跑 4，剛好做完。</li>
+        <li>t = 8～12：P3 跑 4，剩 5，回到隊尾。queue：P4, P1, P3。</li>
+        <li>t = 12～16：P4 跑 4，剩 1。queue：P1, P3, P4。</li>
+        <li>t = 16～20：P1 跑 4，做完。</li>
+        <li>t = 20～24：P3 跑 4，剩 1。queue：P4, P3。</li>
+        <li>t = 24～25：P4 做完；t = 25～26：P3 做完。</li>
+      </ol>
+      <p>Waiting time：P1 = 20 − 0 − 8 = 12、P2 = 8 − 1 − 4 = 3、P3 = 26 − 2 − 9 = 15、P4 = 25 − 3 − 5 = 17，平均 = 47 ÷ 4 = <strong>11.75</strong>。Response time：0、3、6、9，平均 <strong>4.5</strong>。</p>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>「新抵達的 process」和「剛用完 q 的 process」同時要進 queue 時，課本慣例是新抵達的排前面。不同老師可能規定不同，考試前先確認題目怎麼約定。</p>
+      </div>
+
+      <h3>Priority scheduling（non-preemptive）</h3>
+      <p>五個 process 都在時間 0 抵達，數字越小優先權越高：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Process</th><th class="num">Burst time</th><th class="num">Priority</th></tr></thead>
+          <tbody>
+            <tr><td>P1</td><td class="num">10</td><td class="num">3</td></tr>
+            <tr><td>P2</td><td class="num">1</td><td class="num">1</td></tr>
+            <tr><td>P3</td><td class="num">2</td><td class="num">4</td></tr>
+            <tr><td>P4</td><td class="num">1</td><td class="num">5</td></tr>
+            <tr><td>P5</td><td class="num">5</td><td class="num">2</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="gantt-label">甘特圖</p>
+      <div class="gantt" data-start="0">
+        <span class="seg p2" style="--len:1" data-t="1">P2</span>
+        <span class="seg p5" style="--len:5" data-t="6">P5</span>
+        <span class="seg p1" style="--len:10" data-t="16">P1</span>
+        <span class="seg p3" style="--len:2" data-t="18">P3</span>
+        <span class="seg p4" style="--len:1" data-t="19">P4</span>
+      </div>
+      <p>依優先權 P2 → P5 → P1 → P3 → P4。Waiting time：P1 = 6、P2 = 0、P3 = 16、P4 = 18、P5 = 1，平均 = 41 ÷ 5 = <strong>8.2</strong>。如果一直有優先權比 P4 高的新 process 進來，P4 就會 starvation，這時用 aging 慢慢提高它的優先權。</p>
+
+      <h3>Little's formula</h3>
+      <p>某系統平均每秒有 7 個 process 抵達（λ = 7），每個 process 平均在 queue 裡等 2 秒（W = 2），那 queue 裡平均有 n = 7 × 2 = <strong>14</strong> 個 process。反過來，如果知道平均排隊長度是 14、到達速率是 7，也能推出平均等待時間是 2 秒。</p>
+
+      <h2 id="pseudocode">Pseudocode</h2>
+      <h3>SRTF 模擬</h3>
+      <pre class="pseudo"><code>FUNCTION simulate_srtf(processes)
+    time = 0
+    remaining = {p: p.burst FOR p IN processes}
+    finished = 0
+    WHILE finished &lt; len(processes)
+        // 找出已抵達、還沒做完、剩餘時間最短的
+        ready = [p FOR p IN processes IF p.arrival &lt;= time AND remaining[p] &gt; 0]
+        IF ready is empty THEN
+            time = time + 1          // CPU idle
+            CONTINUE
+        END IF
+        p = argmin(ready, key = remaining[p])
+        IF p.first_run is undefined THEN
+            p.first_run = time       // 用來算 response time
+        END IF
+        remaining[p] = remaining[p] - 1   // 一次只跑 1 單位，才能隨時被搶
+        time = time + 1
+        IF remaining[p] == 0 THEN
+            p.completion = time
+            finished = finished + 1
+        END IF
+    END WHILE
+END FUNCTION</code></pre>
+
+      <h3>Round Robin 模擬</h3>
+      <pre class="pseudo"><code>FUNCTION simulate_rr(processes, q)
+    sort processes BY arrival
+    queue = empty FIFO
+    time = 0
+    next = 0                         // 下一個還沒進 queue 的 process
+    WHILE queue not empty OR next &lt; len(processes)
+        IF queue is empty THEN
+            time = max(time, processes[next].arrival)
+        END IF
+        // 把已經抵達的都放進 queue
+        WHILE next &lt; len(processes) AND processes[next].arrival &lt;= time
+            queue.enqueue(processes[next]); next = next + 1
+        END WHILE
+
+        p = queue.dequeue()
+        run = min(q, p.remaining)
+        time = time + run
+        p.remaining = p.remaining - run
+
+        // 先放執行期間新抵達的，再放剛用完 q 的 p
+        WHILE next &lt; len(processes) AND processes[next].arrival &lt;= time
+            queue.enqueue(processes[next]); next = next + 1
+        END WHILE
+        IF p.remaining &gt; 0 THEN
+            queue.enqueue(p)
+        ELSE
+            p.completion = time
+        END IF
+    END WHILE
+END FUNCTION</code></pre>
+
+      <h2 id="comparison">比較整理</h2>
+      <h3>同一題的結果</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>演算法</th><th class="num">平均 Waiting</th><th class="num">平均 Turnaround</th><th class="num">平均 Response</th></tr></thead>
+          <tbody>
+            <tr><td>FCFS</td><td class="num">8.75</td><td class="num">15.25</td><td class="num">8.75</td></tr>
+            <tr><td>SJF</td><td class="num">7.75</td><td class="num">14.25</td><td class="num">7.75</td></tr>
+            <tr class="best"><td>SRTF</td><td class="num">6.5</td><td class="num">13</td><td class="num">4.25</td></tr>
+            <tr><td>RR (q = 4)</td><td class="num">11.75</td><td class="num">18.25</td><td class="num">4.5</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>可以看到 SRTF 三項都最好，但它需要知道每個工作還剩多久，現實中做不到。RR 的平均等待時間最差，可是 response time 很接近 SRTF，而且完全不需要預測 burst，所以互動式系統很愛用。</p>
+
+      <h3>優缺點</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>演算法</th><th>可搶占</th><th>優點</th><th>缺點</th><th>適用情境</th></tr></thead>
+          <tbody>
+            <tr><td>FCFS</td><td>否</td><td>最簡單，公平</td><td>convoy effect，平均等待時間長</td><td>批次工作、burst 差不多長</td></tr>
+            <tr><td>SJF</td><td>否</td><td>同時抵達時平均 waiting 最小</td><td>要預測 burst、長工作 starvation</td><td>能估計工作長度的批次系統</td></tr>
+            <tr><td>SRTF</td><td>是</td><td>平均 waiting 最小（可搶占版）</td><td>要預測 burst、starvation、切換多</td><td>理論比較基準</td></tr>
+            <tr><td>RR</td><td>是</td><td>response time 短，不會 starvation</td><td>平均 waiting 偏長，q 不好選</td><td>分時、互動式系統</td></tr>
+            <tr><td>Priority</td><td>都可以</td><td>能照重要程度排</td><td>starvation（用 aging 解）</td><td>即時系統、有輕重之分的工作</td></tr>
+            <tr><td>MLFQ</td><td>是</td><td>不用預測 burst，自動區分互動和計算型</td><td>參數多、調校複雜</td><td>一般用途作業系統</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>多處理器排程</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>比較</th><th>A</th><th>B</th></tr></thead>
+          <tbody>
+            <tr><td>Asymmetric vs Symmetric</td><td>master CPU 負責排程和 kernel 資料，簡單但會成為瓶頸</td><td>每顆 CPU 自己排程，現代 OS 的做法</td></tr>
+            <tr><td>Common vs Per-core queue</td><td>容易接手工作，但要上鎖</td><td>不用搶鎖、cache 友善，但要 load balancing</td></tr>
+            <tr><td>Push vs Pull migration</td><td>定期檢查，把工作從忙的推到閒的</td><td>閒的 CPU 自己去拉工作</td></tr>
+            <tr><td>Soft vs Hard affinity</td><td>盡量留在同一顆，但不保證</td><td>指定只能在哪些 CPU 上跑</td></tr>
+            <tr><td>Coarse vs Fine-grained</td><td>長延遲才換 thread，要 flush pipeline</td><td>每個指令週期都可以換，需要額外硬體</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="quiz">自我測驗</h2>
+      <details class="quiz">
+        <summary>Q1. 三個 process 都在時間 0 抵達，burst 分別是 P1 = 24、P2 = 3、P3 = 3。用 FCFS，順序 P1、P2、P3 和順序 P2、P3、P1 的平均 waiting time 各是多少？</summary>
+        <p><strong>答案：</strong>P1、P2、P3 是 (0 + 24 + 27) ÷ 3 = 17；P2、P3、P1 是 (0 + 3 + 6) ÷ 3 = 3。</p>
+        <p><strong>原因：</strong>這就是 convoy effect。長工作排在前面時，兩個短工作都要多等 24。把短的排前面，長的那個只多等 6，整體平均大幅下降，這也是 SJF 想法的由來。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q2. Round Robin 的 time quantum 設成無限大，會變成哪個演算法？</summary>
+        <p><strong>答案：</strong>FCFS。</p>
+        <p><strong>原因：</strong>q 無限大代表沒有人會因為時間到被趕下來，每個 process 都會跑到自己結束或去等 I/O，而 queue 是照抵達順序排的，所以行為和 FCFS 一模一樣。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q3. 為什麼說 SJF 在現實中「做不到」？作業系統要怎麼近似它？</summary>
+        <p><strong>答案：</strong>因為無法事先知道下一次 CPU burst 多長，只能用過去的紀錄預測。</p>
+        <p><strong>原因：</strong>常見做法是 exponential averaging：τ<sub>n+1</sub> = α · t<sub>n</sub> + (1 − α) · τ<sub>n</sub>，其中 t<sub>n</sub> 是這次實際的 burst，τ<sub>n</sub> 是上次的預測，α 介於 0 和 1 之間，決定要多相信最近一次的結果。MLFQ 則是另一種思路：不預測，直接看行為分類。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q4. 在 MLFQ 中，如果一個 process 總是在 q 用完前一點點就去做一個很短的 I/O，會發生什麼問題？</summary>
+        <p><strong>答案：</strong>它可以一直留在最高優先權的那層，霸佔 CPU。</p>
+        <p><strong>原因：</strong>只看「有沒有用完一整個 q」的規則可以被鑽漏洞。OSTEP 的改良是改成記錄「在這一層總共用了多少 CPU 時間」，累積用完配額就降級，不管中間有沒有去做 I/O。</p>
+      </details>
+
+      <details class="quiz">
+        <summary>Q5. 為什麼 load balancing 和 processor affinity 會互相衝突？</summary>
+        <p><strong>答案：</strong>load balancing 會把 process 搬到比較閒的 CPU，但搬走就失去原本 CPU 上的 warm cache，違反 affinity 想讓它留在原地的目的。</p>
+        <p><strong>原因：</strong>搬到新的 CPU 後 cache 是 cold 的，一開始會一直 cache miss，要從主記憶體重新載入，反而變慢。所以 OS 要權衡：只有工作量差太多時才搬，或盡量搬到共用 cache 的核心。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q6. 一個系統的 ready queue 平均有 20 個 process，平均每秒有 5 個新 process 抵達，平均每個 process 要等多久？</summary>
+        <p><strong>答案：</strong>4 秒。</p>
+        <p><strong>原因：</strong>用 Little's formula n = λ × W，20 = 5 × W，所以 W = 4 秒。這個關係只要系統處於穩定狀態（進來的速度等於離開的速度）就成立，和用哪種排程演算法無關。</p>
+      </details>
+
+      <h2 id="reading">延伸閱讀</h2>
+      <ul>
+        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter 5 CPU Scheduling（Section 5.1 至 5.5、5.8）</li>
+        <li>上課投影片：05_OS_CPU_Scheduling</li>
+        <li>我的筆記：operating system 筆記 p.201 至 p.233</li>
+      </ul>
+
+      <nav class="pager" id="pager"></nav>
+    </main>
+
+    <aside class="toc" id="toc"></aside>
+  </div>
+
+  <footer class="site-footer">OS Notes · 依照 CLAUDE.md 規則持續擴充</footer>
+  <script src="../assets/glossary.js"></script>
+  <script src="../assets/site.js"></script>
+</body>
+</html>

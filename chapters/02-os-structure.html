@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>02 作業系統結構 OS Structure｜OS 課程筆記</title>
+  <link rel="stylesheet" href="../assets/fonts/fonts.css">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root=".." data-chapter="02-os-structure">
+  <header class="site-header">
+    <a class="brand" href="../index.html">OS Notes</a>
+    <button class="menu-btn" id="menu-btn" type="button">章節</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="content">
+      <header class="chapter-head">
+        <p class="eyebrow">CHAPTER 02</p>
+        <h1>作業系統結構</h1>
+        <p class="en">OS Structure</p>
+      </header>
+
+      <h2 id="key-points">本章重點</h2>
+      <div class="summary-box">
+        <ul>
+          <li>使用者透過 CLI、GUI、觸控或語音介面使用 OS；程式則透過 system call 請 OS 幫忙。</li>
+          <li>我們平常呼叫的是 API（system call 的包裝），API 帶來 portability 和 ease of use；printf 是厚包裝，open 是薄包裝。</li>
+          <li>傳參數給 OS 有三種方法：register、記憶體中的 block / table、stack；system call 分成六大類。</li>
+          <li>Linker 把程式和函式庫接起來（static 或 dynamic linking），loader 把執行檔載進記憶體並處理 relocation；Linux 的執行檔格式是 ELF。</li>
+          <li>OS 設計重視 policy 與 mechanism 分離；結構從 monolithic、layered、microkernel、modules 到現代常見的 hybrid。</li>
+        </ul>
+      </div>
+
+      <h2 id="concepts">核心觀念</h2>
+
+      <h3>User interface</h3>
+      <ul>
+        <li><strong>CLI（Command Line Interface）</strong>：處理指令的程式叫 shell（bash、ksh、csh、tcsh），工作是 parse、search、execute。指令分兩種：內建指令 shell 本來就認識；外部指令 shell 照 PATH 設定去找第一個符合的程式。</li>
+        <li><strong>GUI</strong>：用圖示代表檔案和程式，用滑鼠操作。現在大部分系統同時有 CLI 和 GUI。</li>
+        <li><strong>TUI（Touch）</strong>：用手勢操作，是手機的標準介面；<strong>VUI（Voice）</strong>：用聲音互動。</li>
+      </ul>
+
+      <h3>System call</h3>
+      <p><strong>System call</strong> 是程式和 OS 之間的介面：透過 software interrupt（trap）明確地請 kernel 做事。最底層是組合語言指令，而且一個簡單的動作常常需要好幾個 system call 才能完成。</p>
+      <p>比喻：你不能自己走進銀行金庫拿錢，只能到櫃台填單，由行員（kernel）幫你處理。填單這個動作就是 system call。</p>
+
+      <h3>API：System call 的包裝</h3>
+      <p>直接用 system call 要自己把參數塞進特定暫存器、再觸發 trap，很麻煩。<strong>API（Application Program Interface）</strong>把這些包成普通的函式（例如 POSIX API、Windows API）。好處：</p>
+      <ol>
+        <li><strong>Portability</strong>：每個 OS 的 system call 名稱、編號、傳參數方式都不同，只要遵守 POSIX 這種標準 API，程式換到別的系統重新編譯就能跑。</li>
+        <li><strong>Ease of use</strong>：API 幫你處理參數和錯誤碼等細節，呼叫者完全不用知道 kernel 裡怎麼實作。</li>
+      </ol>
+      <dl class="terms">
+        <dt>薄包裝：open()</dt>
+        <dd>API 叫 open()，底下的 system call 也叫 open，幾乎一對一直通。API 只是把參數放對位置、填上編號、觸發 trap。</dd>
+        <dt>厚包裝：printf()</dt>
+        <dd>kernel 裡根本沒有 printf，只認得 write。printf 是 C 函式庫（Linux 下是 glibc）先處理格式（把 42 轉成字元 '4' '2'），再呼叫 write 這個 system call。C 的 printf、C++ 的 cout、Python 的 print，最後把字送到螢幕的都是同一個 write。</dd>
+      </dl>
+      <div class="callout tip">
+        <strong>記憶技巧</strong>
+        <p>Linux 上可以用 <code>strace</code> 指令看一個程式執行時呼叫了哪些 system call，<code>man read</code> 可以查 read() 這個 API 的規格。</p>
+      </div>
+
+      <h3>傳參數給 OS 的三種方法</h3>
+      <ol>
+        <li><strong>放在 register</strong>：最簡單、最快，但參數可能比 register 還多。</li>
+        <li><strong>放在記憶體的 block / table</strong>：把參數存在一塊記憶體，再把那塊的位址放進 register，kernel 拿位址去讀。</li>
+        <li><strong>push 到 stack</strong>：kernel 再從 stack pop 出來用。</li>
+      </ol>
+      <p>後兩種不限制參數的數量和長度。原則是：東西太大或太多，就不傳東西本身，改傳它在哪裡。</p>
+
+      <h3>System call 的六大類</h3>
+      <dl class="terms">
+        <dt>Process control</dt>
+        <dd>create / terminate process、load / execute、end()（正常結束）與 abort()（不正常中止，會 dump 記憶體內容方便 debugger 找 bug）、wait、allocate / free memory。</dd>
+        <dt>File manipulation</dt>
+        <dd>create / delete、open / close、read / write / reposition（移動讀寫位置）、get / set file attributes。</dd>
+        <dt>Device manipulation</dt>
+        <dd>request / release device（例如 Zoom 先 request 了攝影機，其他程式只能等它 release）、read / write、logically attach / detach devices。</dd>
+        <dt>Information maintenance</dt>
+        <dd>get / set time or date、system data、process / file / device 的屬性。</dd>
+        <dt>Communication</dt>
+        <dd>create / delete connection、send / receive messages、attach / detach remote devices。</dd>
+        <dt>Protection</dt>
+        <dd>get / set file permissions，Unix 的 chmod 就是在做這個。</dd>
+      </dl>
+      <ul>
+        <li>Unix 把所有東西都包成檔案，所以裝置也能共用 read() / write()。</li>
+        <li>檔案做不到的事（例如輸入密碼時不顯示、調整終端機大小）交給 <code>ioctl()</code>。</li>
+        <li>每個程式一啟動，OS 就開好三個 <strong>file descriptor</strong>：0 = stdin、1 = stdout、2 = stderr。</li>
+        <li>之後 open() 一個檔案，OS 回傳一個小整數（例如 3），代表它記在這個 process 的已開啟檔案表第 3 格，之後讀寫只要拿這個號碼。</li>
+      </ul>
+
+      <h3>Single-task 與 Multi-task 的 process control</h3>
+      <p><strong>Arduino</strong> 沒有 OS，只有一個 boot loader：一次只能跑一個程式（sketch），sketch 獨佔整個記憶體，要換程式只能把新的燒進去覆蓋舊的。<strong>FreeBSD</strong> 這種 Unix 系統可以同時跑很多程式：shell 用 fork() 建立 process、exec() 載入程式，程式結束時回傳 exit code（0 代表沒有錯誤，大於 0 是錯誤碼）。</p>
+
+      <h3>System services</h3>
+      <p>也叫 system utilities，是 OS 附帶的一堆小工具程式，提供方便的開發和執行環境。一般使用者不會自己寫程式呼叫 open()、read()，而是直接用 <code>cp</code> 這種工具，由工具去呼叫 system call，所以它們是使用者和 system call 之間的中間人。</p>
+
+      <h3>Linker 與 Loader</h3>
+      <ul>
+        <li><strong>Compiler</strong>：把 C 程式翻成機器碼（relocatable object file）。遇到 sqrt 只留一個空格：「這裡要呼叫 sqrt，但不知道它在哪」。</li>
+        <li><strong>Linker</strong>：把 .o 和函式庫拼在一起、填上空格，產出可執行檔。</li>
+        <li><strong>Loader</strong>：執行時把執行檔搬進記憶體，並負責 <strong>relocation</strong>：因為 swapping、virtual memory，程式被放的位置可能改變，程式裡的位址必須用相對的。如果寫死 <code>call 1050</code>，程式被搬到 5000 號開始的地方後就會跳錯位置。</li>
+      </ul>
+      <dl class="terms">
+        <dt>Static linking</dt>
+        <dd>編譯時直接把函式庫的程式碼複製進執行檔，產出一個獨立的 single binary，搬到同 OS、同架構的電腦就能跑。</dd>
+        <dt>Dynamic linking</dt>
+        <dd>執行檔只記錄「需要某個函式庫」，程式啟動時 loader 才去找來接上（例如 Windows 的 DLL）。找不到函式庫就跑不起來。</dd>
+        <dt>ELF（Executable and Linkable Format）</dt>
+        <dd>UNIX / Linux 的 object file 與執行檔格式，裡面有機器碼和 symbol table（記錄函式、變數名稱，linker 靠它知道空格要填什麼）。</dd>
+      </dl>
+
+      <h3>OS 設計原則</h3>
+      <p>設計目標分成兩種，而且常互相衝突，要依目標做 trade-off：</p>
+      <ul>
+        <li><strong>User goals</strong>：好用、好學、可靠、安全、快</li>
+        <li><strong>System goals</strong>：好設計、好實作、好維護、有效率</li>
+      </ul>
+      <p>常用的軟體工程技巧：abstraction、encapsulation 與 information hiding、modularization（例如 LKM）、separation of concerns、low coupling 與 high cohesion、interface 與 implementation 分離。</p>
+      <p>最常考的是 <strong>separation of policy and mechanism</strong>：</p>
+      <ul>
+        <li><strong>Policy</strong>：要做什麼，依情況而定，透過參數或設定檔調整。</li>
+        <li><strong>Mechanism</strong>：怎麼做，相對穩定。</li>
+        <li>兩者分開，改策略時就不用改底層程式。例如 timer 是保護 CPU 的 mechanism，「某個使用者的 timer 要設多長」是 policy。</li>
+      </ul>
+      <p>實作語言：早期用組合語言，現在混合使用，最底層用組合語言，主體用 C / C++，系統程式還會用 shell script、Python 等。效能分析可以用 <code>perf</code> 這類工具看花了多少時間、執行多少指令。</p>
+
+      <h3>OS 的結構</h3>
+      <dl class="terms">
+        <dt>Monolithic（單體式）</dt>
+        <dd>所有 OS 功能都放在 kernel 這一個大程式裡，彼此直接呼叫。效能好，但難以維護和擴充。早期 Unix、MS-DOS（simple structure，沒有清楚分層，應用程式甚至能直接碰硬體）屬於這類。</dd>
+        <dt>Layered（分層式）</dt>
+        <dd>把 OS 拆成好幾層，最底層是硬體、最上層是使用者介面，第 i 層只使用第 i−1 層提供的服務、只提供服務給第 i+1 層。loosely coupled、好除錯（由下往上一層一層驗證），但每次呼叫要穿過很多層，效能較差，而且很難決定每個功能該放哪一層。</dd>
+        <dt>Microkernel（微核心）</dt>
+        <dd>kernel 只保留最基本的功能（行程間通訊、基本記憶體管理、CPU scheduling），其他服務（檔案系統、driver）移到 user space，元件之間用 <strong>message passing</strong> 溝通。容易擴充、移植，可靠又安全（一個服務掛掉不會拖垮 kernel）；缺點是訊息傳遞和模式切換的 overhead 讓效能變差。</dd>
+        <dt>Modules（LKM）</dt>
+        <dd>Loadable Kernel Modules：kernel 有核心元件，其他功能做成模組，需要時才動態載入（例如插上新裝置才載入 driver）。每個模組有定義好的介面，像 layered 但更有彈性，又因為模組在 kernel 裡直接呼叫，不需要 message passing，效能比 microkernel 好。Linux 就是這樣。</dd>
+        <dt>Hybrid（混合式）</dt>
+        <dd>現實中大部分現代 OS 混合多種做法，在效能、安全、彈性之間取平衡。</dd>
+      </dl>
+
+      <h3>案例：macOS / iOS 與 Android</h3>
+      <p><strong>macOS 和 iOS</strong> 上層不一樣（一個用滑鼠、一個用觸控），底下共用 <strong>Darwin</strong> 核心。Darwin 是 hybrid：包含 Mach microkernel（記憶體管理、IPC、排程）和 BSD UNIX 的部分（POSIX API、網路、檔案系統），也支援動態載入的 kernel extensions。</p>
+      <p><strong>Android</strong>（Google 主導、開源）由下往上是：</p>
+      <ol>
+        <li><strong>Linux kernel</strong>：管理 process、記憶體、driver</li>
+        <li><strong>HAL</strong>（hardware abstraction layer）：讓上層用同一套方式操作各家硬體</li>
+        <li><strong>Native libraries 與 ART</strong>（Android Runtime）：執行 .java → .class → .dex 編譯出來的程式</li>
+        <li><strong>Android framework</strong>：開相機、發通知等現成 API</li>
+        <li><strong>Applications</strong></li>
+      </ol>
+
+      <h2 id="example">實際例子</h2>
+      <h3>printf("Hello") 背後的四個步驟</h3>
+      <pre class="lang-c"><code>#include &lt;stdio.h&gt;
+
+int main(void) {
+    printf("Hello\n");
+    return 0;
+}</code></pre>
+      <ol>
+        <li>程式在 user mode 呼叫 <code>printf()</code>（API）。</li>
+        <li>C 函式庫 glibc 攔截這個呼叫，把格式字串處理好。</li>
+        <li>glibc 呼叫真正的 system call <code>write(1, "Hello\n", 6)</code>，1 就是 stdout 的 file descriptor；這一步觸發 trap 進入 kernel mode。</li>
+        <li>kernel 把字送到螢幕，write() 回傳寫了幾個 byte，glibc 再把結果傳回程式。</li>
+      </ol>
+      <p>在 Linux 上用 <code>strace ./hello</code> 執行，輸出最後會看到類似 <code>write(1, "Hello\n", 6) = 6</code> 的一行（前面還有很多載入程式、函式庫用的 system call，依系統而異）。</p>
+
+      <h3>Static 還是 Dynamic linking？</h3>
+      <p>假設電腦上有 100 個程式都用到同一個數學函式庫：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>情境</th><th>Static linking</th><th>Dynamic linking</th></tr></thead>
+          <tbody>
+            <tr><td>硬碟空間</td><td>100 個執行檔各有一份函式庫</td><td>硬碟上只要一份</td></tr>
+            <tr><td>記憶體</td><td>同時執行時各自載入一份</td><td>記憶體裡可以只載入一份大家共用</td></tr>
+            <tr><td>函式庫發現安全漏洞</td><td>100 個程式全部要重新編譯</td><td>只要更新那一份，程式下次啟動就用新版</td></tr>
+            <tr><td>搬到另一台電腦</td><td>沒裝函式庫也能跑</td><td>那台沒有函式庫就跑不起來</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="pseudocode">Pseudocode</h2>
+      <h3>API 怎麼把呼叫變成 system call</h3>
+      <pre class="pseudo"><code>// user mode：函式庫裡的 open()
+FUNCTION open(path, flags)
+    register[0] = SYSCALL_OPEN       // system call 編號
+    register[1] = address_of(path)   // 參數太大，傳位址
+    register[2] = flags
+    trap()                           // 進入 kernel mode
+    RETURN register[0]               // 回傳 file descriptor 或錯誤碼
+END FUNCTION
+
+// kernel mode：trap handler
+FUNCTION syscall_handler()
+    n = register[0]
+    result = system_call_table[n](register[1], register[2])
+    register[0] = result
+    return_from_trap()               // 回到 user mode
+END FUNCTION</code></pre>
+
+      <h3>Shell：parse、search、execute</h3>
+      <pre class="pseudo"><code>WHILE true
+    line = read_line()
+    command, args = parse(line)
+    IF command IS builtin THEN
+        run_builtin(command, args)
+    ELSE
+        path = search_in_PATH(command)       // 找第一個符合的執行檔
+        pid = fork()
+        IF pid == 0 THEN
+            exec(path, args)
+        ELSE
+            wait(pid)
+        END IF
+    END IF
+END WHILE</code></pre>
+
+      <h3>cp 背後的 system call 順序</h3>
+      <pre class="pseudo"><code>FUNCTION copy(src, dst)
+    in  = open(src, READ)             // 失敗就印錯誤並 abort
+    out = open(dst, WRITE | CREATE)
+    WHILE (n = read(in, buffer)) > 0
+        write(out, buffer, n)
+    END WHILE
+    close(in)
+    close(out)
+    exit(0)                           // 正常結束
+END FUNCTION</code></pre>
+
+      <h2 id="comparison">比較整理</h2>
+      <h3>OS 結構</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>結構</th><th>做法</th><th>優點</th><th>缺點</th><th>例子</th></tr></thead>
+          <tbody>
+            <tr><td>Monolithic</td><td>全部功能在一個 kernel</td><td>效能最好</td><td>難維護、一個 bug 拖垮全部</td><td>早期 Unix、MS-DOS</td></tr>
+            <tr><td>Layered</td><td>分層，只能用下一層的服務</td><td>結構清楚、好除錯</td><td>層層呼叫慢、難以分層</td><td>教學用的 THE 系統</td></tr>
+            <tr><td>Microkernel</td><td>kernel 最小化，服務在 user space，靠 message passing</td><td>好擴充、可靠、安全</td><td>訊息傳遞 overhead 大</td><td>Mach</td></tr>
+            <tr><td>Modules</td><td>核心 + 動態載入的模組</td><td>有彈性、效能好</td><td>模組仍在 kernel 裡，壞掉一樣危險</td><td>Linux</td></tr>
+            <tr><td>Hybrid</td><td>混合上面幾種</td><td>兼顧效能與彈性</td><td>結構較複雜</td><td>macOS（Darwin）、Windows</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>其他常考的對照</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>比較</th><th>A</th><th>B</th></tr></thead>
+          <tbody>
+            <tr><td>System call vs API</td><td>kernel 提供的真正介面，組合語言層級，各 OS 不同</td><td>函式庫提供的包裝，好用、可移植</td></tr>
+            <tr><td>open() vs printf()</td><td>薄包裝，和 system call 一對一</td><td>厚包裝，kernel 裡不存在，最後呼叫 write</td></tr>
+            <tr><td>Policy vs Mechanism</td><td>要做什麼，會依情況改變</td><td>怎麼做，相對穩定</td></tr>
+            <tr><td>Linker vs Loader</td><td>產生執行檔時把程式和函式庫接起來</td><td>執行時把執行檔載入記憶體並 relocation</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="quiz">自我測驗</h2>
+      <details class="quiz">
+        <summary>Q1. printf 是不是 system call？它最後用到哪一個 system call？</summary>
+        <p><strong>答案：</strong>不是。printf 是 C 函式庫的 API，最後呼叫的是 write。</p>
+        <p><strong>原因：</strong>kernel 只認得 write，printf 這個名字在 kernel 裡根本不存在。printf 先在 user mode 把格式處理好（例如把數字轉成字元），再把整理好的字串交給 write 這個 system call 寫到 file descriptor 1（stdout）。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q2. 一個 system call 需要傳 8 個參數，但 CPU 只有 6 個可用的 register，該怎麼辦？</summary>
+        <p><strong>答案：</strong>把參數存在記憶體的一個 block / table 裡，只把這塊記憶體的位址放進 register；或是把參數 push 到 stack。</p>
+        <p><strong>原因：</strong>register 數量固定，參數一多就放不下。改用 block / table 或 stack 就不受參數數量和長度的限制，kernel 拿到位址後自己去記憶體把參數讀出來。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q3. 「CPU scheduler 每次給一個 process 10 ms」這句話裡，哪個部分是 policy、哪個部分是 mechanism？</summary>
+        <p><strong>答案：</strong>用 timer 中斷把 CPU 拿回來、切換 process 是 mechanism；「10 ms」這個時間長度是 policy。</p>
+        <p><strong>原因：</strong>mechanism 回答「怎麼做」，不管給多長的時間都是用同一套 timer 和 context switch；policy 回答「要做什麼」，10 ms 可能依系統用途改成 5 ms 或 20 ms，透過參數調整就好，不需要改底層程式。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q4. Microkernel 比 monolithic kernel 安全，為什麼大部分 OS 還是沒有採用純 microkernel？</summary>
+        <p><strong>答案：</strong>因為效能。microkernel 的服務都在 user space，彼此要靠 message passing，每次溝通都要經過 kernel、切換模式和複製訊息。</p>
+        <p><strong>原因：</strong>monolithic 的元件在同一個 kernel 裡直接呼叫函式，幾乎沒有額外成本。所以現代 OS 多半走 hybrid 或 modules：保留模組化的好處，但讓關鍵服務留在 kernel 裡直接呼叫，例如 Linux 的 LKM、macOS 的 Darwin。</p>
+      </details>
+
+      <h2 id="reading">延伸閱讀</h2>
+      <ul>
+        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter 2 Operating-System Structures（Section 2.3 至 2.8）</li>
+        <li>上課投影片：02_OS_OS_Structure</li>
+        <li>我的筆記：operating system 筆記 p.86 至 p.124</li>
+      </ul>
+
+      <nav class="pager" id="pager"></nav>
+    </main>
+
+    <aside class="toc" id="toc"></aside>
+  </div>
+
+  <footer class="site-footer">OS Notes · 依照 CLAUDE.md 規則持續擴充</footer>
+  <script src="../assets/glossary.js"></script>
+  <script src="../assets/site.js"></script>
+</body>
+</html>

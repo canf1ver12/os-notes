@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>01 作業系統概論 Introduction｜OS 課程筆記</title>
+  <link rel="stylesheet" href="../assets/fonts/fonts.css">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root=".." data-chapter="01-introduction">
+  <header class="site-header">
+    <a class="brand" href="../index.html">OS Notes</a>
+    <button class="menu-btn" id="menu-btn" type="button">章節</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="content">
+      <header class="chapter-head">
+        <p class="eyebrow">CHAPTER 01</p>
+        <h1>作業系統概論</h1>
+        <p class="en">Introduction</p>
+      </header>
+
+      <h2 id="key-points">本章重點</h2>
+      <div class="summary-box">
+        <ul>
+          <li>電腦系統由 user、application、operating system、hardware 四層組成，OS 負責把硬體資源抽象化、分配資源、控制程式執行。</li>
+          <li>CPU 知道 I/O 做完的方法有 polling 和 interrupt 兩種；interrupt 靠 interrupt vector 找到對應的 ISR，大量資料則交給 DMA 直接搬。</li>
+          <li>儲存裝置依速度、價格、揮發性排成階層；電腦架構從單處理器、SMP、multicore、NUMA 到 clustered system。</li>
+          <li>開機流程：firmware（BIOS / UEFI）→ bootloader（GRUB）→ kernel → init（systemd）→ daemons。</li>
+          <li>dual mode 和 timer 保護系統不被應用程式弄壞；OS 管理 process、memory、storage、cache、I/O 與安全，也可以用虛擬化切出好幾台虛擬機。</li>
+        </ul>
+      </div>
+
+      <h2 id="concepts">核心觀念</h2>
+
+      <h3>電腦系統與 OS 的角色</h3>
+      <p>電腦系統可以分成四層：</p>
+      <ul>
+        <li><strong>User</strong>：人、機器、其他電腦</li>
+        <li><strong>Application</strong>：用資源完成使用者的需求</li>
+        <li><strong>Operating system</strong>：控制和協調資源的使用</li>
+        <li><strong>Hardware</strong>：提供 CPU 時間、記憶體、I/O 裝置等資源</li>
+      </ul>
+      <p>OS 的角色有三個：</p>
+      <ul>
+        <li><strong>Abstraction</strong>：把資源包裝成好用的概念，例如把硬碟包裝成「檔案」、把正在跑的程式包裝成「process」</li>
+        <li><strong>Resource manager</strong>：決定誰能用 CPU、記憶體分給誰</li>
+        <li><strong>Controller</strong>：控制應用程式的執行，包括錯誤處理和安全</li>
+      </ul>
+      <p>目標是 convenient、efficient、robust、secure。</p>
+      <p>可以把 OS 想成餐廳的外場經理：客人（application）不會自己衝進廚房（hardware）拿鍋子，而是告訴經理要什麼，經理安排廚房、決定誰先上菜、也不讓客人亂動別人的桌子。</p>
+      <dl class="terms">
+        <dt>Kernel（核心）</dt>
+        <dd>OS 裡一直在記憶體中執行、權限最高的核心部分。OS 的主要元件是 kernel、system programs 和 applications，有時還有 middleware（給開發者的資料庫、多媒體、圖形等額外服務）。</dd>
+        <dt>Device driver（驅動程式）</dt>
+        <dd>每種裝置由一個 device controller 管理，driver 則是 OS 和 controller 之間的翻譯官，把「讀這個檔案」這種通用指令翻成那款裝置聽得懂的指令。</dd>
+      </dl>
+
+      <h3>Polling 與 Interrupt</h3>
+      <p>CPU 平常循序執行程式，但也要處理 I/O 裝置的要求。問題是：CPU 怎麼知道裝置什麼時候做完？</p>
+      <ul>
+        <li><strong>Polling（輪詢，busy waiting）</strong>：CPU 一直去讀裝置的 status register 問「好了沒」，I/O 完成才做下一件事。有 10 個裝置就要分別問 10 次。</li>
+        <li><strong>Interrupt（中斷）</strong>：CPU 先去做別的事，裝置好了自己來「敲門」。檢查 interrupt request line 是 CPU 電路內建在指令週期裡的動作，幾乎不花成本。</li>
+      </ul>
+      <p>中斷有兩個來源：</p>
+      <dl class="terms">
+        <dt>Hardware interrupt</dt>
+        <dd>外部裝置透過 interrupt request line 發訊號，<strong>非同步</strong>，隨時可能來，跟程式跑到哪一行無關。意思是「我做完了，來處理」。</dd>
+        <dt>Trap（軟體中斷）</dt>
+        <dd>程式自己造成的，<strong>同步</strong>，一定是執行到那個指令才發生。分成 exception（除以 0、存取不合法記憶體）和 system call（主動請 OS 幫忙，例如讀檔）。</dd>
+      </dl>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>同步或非同步看的不是「是不是故意的」，而是「跟程式執行到哪一行有沒有直接關係」。不管是哪一種，CPU 處理的手續都一樣：</p>
+        <ol>
+          <li>停下目前的程式</li>
+          <li>保存 CPU 狀態和目前的位址</li>
+          <li>切到 kernel mode</li>
+          <li>用編號查 interrupt vector，跳去對應的 handler</li>
+          <li>handler 做完，還原狀態，回到原本的程式</li>
+        </ol>
+      </div>
+
+      <h3>Interrupt vector 與 ISR</h3>
+      <p><strong>Interrupt vector（IV）</strong>是一個存指標的陣列，放在記憶體最前面，每一格指向一個 <strong>ISR</strong>（interrupt service routine，真正處理那個中斷的程式碼）。用 interrupt number 當 index 直接查，O(1) 就找到，不用一個一個問「是你嗎？」。</p>
+      <ul>
+        <li>32-bit PC 用記憶體前 1024 bytes 放 IV：每格 4 bytes，共 256 格。不夠用時用 <strong>interrupt chaining</strong>：每格指向一串 ISR 的 linked list，CPU 沿著 list 一個一個問「是不是你的裝置」，越常用的放越前面。</li>
+        <li>現代系統有專門的 <strong>interrupt controller</strong> 幫忙整理、過濾、排序中斷：有優先順序（prioritized），也可以延後（deferrable）。</li>
+        <li>兩條中斷請求線：<strong>non-maskable interrupt（NMI）</strong>不能被關掉，用在記憶體錯誤、斷電等重大事件；<strong>maskable interrupt</strong>可以暫時遮住，例如正在做 critical section 時先別打斷。</li>
+        <li>ISR 在 <strong>interrupt context</strong> 裡執行，這是 atomic context，執行時不能被打斷。</li>
+      </ul>
+
+      <h3>Top half 與 Bottom half</h3>
+      <p>中斷要很快處理完，才不會打斷原本的工作太久，但很多 ISR 的工作量很大，「做很多事」和「做得很快」是 trade-off。解法是把 ISR 拆成兩段：</p>
+      <ul>
+        <li><strong>Top half</strong>：中斷一來馬上做，只做最急、最少的事，不能被打斷。</li>
+        <li><strong>Bottom half</strong>：等 CPU 方便時再做比較花時間但不急的事，可以被打斷。</li>
+      </ul>
+      <p>網卡的例子：網卡的 buffer 很小，不趕快把封包搬走，下一批就沒地方放、封包會掉。所以 top half 只負責回應硬體、把封包搬進記憶體；解析封包、交給應用程式留給 bottom half。</p>
+
+      <h3>DMA</h3>
+      <p>大量 I/O 如果每個 byte 都要 CPU 親自搬，會吃掉很多 CPU 時間。<strong>DMA（Direct Memory Access）</strong>的流程：</p>
+      <ol>
+        <li>CPU 先設好參數：「從 x 位址開始，連續讀 y bytes」。</li>
+        <li>CPU 就去做別的事了。</li>
+        <li>device controller 自己把整個 block 從裝置搬進記憶體，不經過 CPU。</li>
+        <li><strong>整個 block 搬完才發一次 interrupt</strong> 通知 CPU。</li>
+      </ol>
+      <pre class="diagram">no DMA : Device -> Device Controller -> CPU -> Memory
+DMA    : Device -> Device Controller --------> Memory   (one interrupt per block)</pre>
+      <p>代價是 DMA 搬資料也要用 bus 存取記憶體，會和 CPU 搶 memory cycles。適合的情境：</p>
+      <ul>
+        <li>鍵盤、滑鼠：資料量少又零散，用 interrupt</li>
+        <li>SSD、硬碟、網卡：資料量大、一次一整塊，用 DMA</li>
+      </ul>
+
+      <h3>Storage hierarchy</h3>
+      <p>儲存裝置依 speed、cost（每 GB 多少錢）、volatility（斷電會不會消失）排成階層：越上面越快、越貴、容量越小。</p>
+      <pre class="diagram">registers        <- managed by compiler
+cache            <- managed by hardware
+main memory      <- managed by OS     (primary storage: small, fast, volatile)
+NVM / SSD / HDD  <- managed by OS     (secondary storage: nonvolatile)
+tertiary storage                     (tape, optical: WORM or RW)</pre>
+      <p>每一層的資料，下一層都有一份（backed by）。問題是改了最上面那份，下面的就過期了：</p>
+      <ul>
+        <li><strong>Multitasking</strong>：一顆 CPU 輪流跑多個 process，要保證每個 process 讀到的都是最新版本，而不是記憶體裡過期的那份。</li>
+        <li><strong>Multiprocessor</strong>：每顆 CPU 有自己的 cache，要靠硬體做 <strong>cache coherency</strong>。</li>
+      </ul>
+
+      <h3>Computer-system architecture</h3>
+      <p>先分清楚：processor 是一顆實體晶片；CPU（core）是真正執行指令的硬體，一顆 processor 裡可能有好幾個。</p>
+      <dl class="terms">
+        <dt>SMP（Symmetric Multiprocessing）</dt>
+        <dd>好幾顆 processor，每顆有自己的 registers 和 cache，共用同一個 main memory。大家地位一樣，都能跑任何工作，但會搶同一個記憶體。</dd>
+        <dt>Multicore</dt>
+        <dd>一顆 processor 裡塞好幾個 core，各有 L1 cache、共用 L2 cache。一樣會搶 main memory，但因為有共用的 cache、晶片內溝通快，效能比 SMP 好。</dd>
+        <dt>NUMA（Non-Uniform Memory Access）</dt>
+        <dd>每顆 CPU 有自己專屬的 memory，CPU 之間用 interconnect 連起來，解決搶記憶體的問題。代價是存取別顆 CPU 的記憶體比較慢，所以 OS 要盡量把程式的資料放在它跑的那顆 CPU 旁邊。</dd>
+        <dt>Clustered system</dt>
+        <dd>好幾台完整的電腦連在一起合作。high-availability 分 asymmetric（一台工作、一台 hot standby 用 heartbeat 盯著）和 symmetric（全部都在工作、互相盯著）；HPC 則把大計算拆給很多台，程式要寫成能平行化，用 DLM（distributed lock manager）避免同時改同一筆資料，常透過 SAN 共用儲存。優點是 scalability、high availability、low cost。</dd>
+      </dl>
+
+      <h3>開機流程</h3>
+      <p>電腦一通電，記憶體是空的，第一條指令從哪裡來？答案是放在 ROM / EEPROM 裡的 <strong>boot firmware</strong>。</p>
+      <ol>
+        <li><strong>Firmware</strong>：BIOS 從固定位置的 boot sector（限 512 bytes）載入第一個 bootloader，難以支援 GUI；UEFI 本身就像一個小 OS，能驅動顯示、網卡、USB，從 FAT-32 格式的 EFI System Partition（ESP）讀 bootloader，一顆硬碟可以放好幾個 OS 的 bootloader。</li>
+        <li><strong>Second bootloader</strong>（例如 GRUB）：在 file system 還沒 mount 之前自己讀檔，找到 kernel image（vmlinuz）和參數，載進記憶體。vmlinuz 開頭有一段沒壓縮的 setup code，負責把後面壓縮的 vmlinux 解開再跳過去執行。</li>
+        <li><strong>Kernel</strong>：重新初始化 CPU registers、device controllers、記憶體管理；先 mount 一個放在 RAM 裡的小檔案系統 initramfs，用裡面的驅動程式讀真正的硬碟後再換成真正的根目錄；填好 interrupt vector。</li>
+        <li><strong>init（systemd）</strong>：把 daemons（背景服務）一個一個叫起來，之後系統就等待 interrupt 並處理。</li>
+      </ol>
+
+      <h3>Multiprogramming 與 Multitasking</h3>
+      <p><strong>Multiprogramming</strong>（batch system）是為了效率：一個使用者沒辦法讓 CPU 一直忙，所以記憶體裡放好幾個 job，一個去等 I/O 就換另一個跑。<strong>Multitasking</strong>（timesharing）是它的延伸：切換得非常頻繁（每幾毫秒換一次），使用者可以同時和每個程式互動，response time 應小於 1 秒。要做到這點需要 CPU scheduling 和 memory management（swapping、virtual memory）。</p>
+
+      <h3>Dual mode 與 Timer</h3>
+      <p>CPU 本身分不出一道指令來自 OS 還是應用程式，所以用硬體做 <strong>dual mode</strong>：CPU 裡有一個 <strong>mode bit</strong>（0 = kernel mode、1 = user mode）。可能危害系統的指令是 <strong>privileged instruction</strong>，只能在 kernel mode 執行，在 user mode 執行會被硬體擋下。</p>
+      <p>從 user mode 進到 kernel mode 唯一的路是 trap / interrupt：硬體在跳進 OS 的那一瞬間自動把 mode bit 改成 0，而且跳去執行的是 IV 指到的 OS 程式碼，不是應用程式自己的。kernel mode 也叫 supervisor mode、system mode、privileged mode。</p>
+      <p>虛擬化需要更多層的 <strong>multimode</strong>：VMM 跑在最高權限（Ring 0），guest OS 想執行 privileged instruction 會被擋下交給 VMM，VMM 用安全的方式代做（binary translation），讓 guest OS 以為自己成功了。</p>
+      <p><strong>Timer</strong> 防止某個程式無窮迴圈霸佔 CPU：OS 在把 CPU 交出去前，用 privileged instruction 設好 counter，由實體時脈遞減，歸零就發 interrupt，OS 拿回控制權，決定換下一個程式或直接終止超時的程式。</p>
+
+      <h3>OS 管理的資源</h3>
+      <ul>
+        <li><strong>Process management</strong>：建立、刪除、暫停、恢復 process，提供同步、溝通（IPC）、處理 deadlock 的機制。process 是 program in execution，硬碟上一個 chrome.exe 可以變成好幾個 process。</li>
+        <li><strong>Memory management</strong>：記錄記憶體哪些部分被誰使用、決定誰移入移出、分配與釋放。</li>
+        <li><strong>Storage management</strong>：把長得不一樣的儲存裝置統一包裝成 file；mass-storage 要做 mounting、free-space management、storage allocation、disk scheduling、partitioning、protection。</li>
+        <li><strong>I/O subsystem</strong>：buffering、caching、spooling，加上各裝置的 driver。</li>
+        <li><strong>Protection 與 security</strong>：protection 控制誰能存取什麼資源，security 防禦內外部攻擊；用 user ID（UID）和 group ID（GID）設定權限。</li>
+      </ul>
+
+      <h3>虛擬化</h3>
+      <p><strong>Virtual machine</strong> 是在一台電腦（host）上假裝出另一台電腦，裡面跑一個完整的 guest OS，由 <strong>VMM（hypervisor）</strong>管理。</p>
+      <ul>
+        <li><strong>Monolithic hypervisor</strong>：driver 放在 hypervisor 裡，例如 VMware ESXi。</li>
+        <li><strong>Microkernel hypervisor</strong>：由一台有特權的 administrative VM 用自己的 driver 操作硬體，例如 Xen 的 Dom0，其他 DomU 透過 XenBus 把請求送過去。</li>
+        <li><strong>優點</strong>：隔離、搬遷方便、提高硬體使用率與可用性。</li>
+        <li><strong>顧慮</strong>：效能損耗、單點故障。</li>
+      </ul>
+      <p>運算環境除了傳統 PC，還有 mobile（電池、散熱、OS 不能太肥）、client-server、peer-to-peer、cloud computing（IaaS、PaaS、SaaS）等。</p>
+
+      <h2 id="example">實際例子</h2>
+      <h3>Python 讀一個檔案，背後發生什麼事？</h3>
+      <pre class="lang-py"><code>data = open("grades.csv").read()</code></pre>
+      <ol>
+        <li>程式不能自己碰硬體，只能用 <strong>system call</strong> 拜託 OS，觸發 trap，CPU 切到 kernel mode。</li>
+        <li>OS 找到對應的 <strong>device driver</strong>，把「讀這個檔案」翻成硬碟控制器聽得懂的指令。</li>
+        <li>硬碟很慢，CPU 不會乾等，OS 先把 CPU 切給其他程式（context switch），這個 process 進入 waiting。</li>
+        <li>controller 用 <strong>DMA</strong> 把資料一整塊搬進記憶體。</li>
+        <li>搬完後發出 <strong>interrupt</strong>，CPU 暫停手上的事，查 IV 跳到 ISR，OS 把這個 process 改回 ready。</li>
+        <li>輪到它時，read() 回傳資料，程式繼續往下跑。</li>
+      </ol>
+
+      <h3>DMA 省下多少次中斷？</h3>
+      <p>假設 SSD 一個 block 是 4 KB = 4096 bytes：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>方式</th><th class="num">讀 1 個 block 的中斷次數</th><th class="num">讀 1 MB（256 個 block）</th></tr></thead>
+          <tbody>
+            <tr><td>每個 byte 中斷一次</td><td class="num">4096</td><td class="num">1,048,576</td></tr>
+            <tr class="best"><td>DMA，每個 block 中斷一次</td><td class="num">1</td><td class="num">256</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="pseudocode">Pseudocode</h2>
+      <h3>Polling：CPU 自己一直問</h3>
+      <pre class="pseudo"><code>FUNCTION write_char_polling(c)
+    device.data = c
+    device.command = WRITE
+    WHILE device.status != DONE
+        // busy waiting：一直讀 status register，什麼事都不能做
+    END WHILE
+END FUNCTION</code></pre>
+
+      <h3>CPU 的指令週期如何處理 interrupt</h3>
+      <pre class="pseudo"><code>WHILE true
+    instruction = fetch(PC)
+    decode(instruction)
+    execute(instruction)
+    // 每道指令做完，硬體檢查 interrupt request line
+    IF interrupt_request_line == ON THEN
+        n = read_interrupt_number()          // catch：是誰、什麼事
+        save(PC, registers)                  // 存好現場
+        mode_bit = KERNEL                    // 切到 kernel mode
+        PC = interrupt_vector[n]             // dispatch：查表跳到 ISR
+    END IF
+END WHILE
+
+FUNCTION isr_example()
+    save_registers_used_by_isr()
+    handle_the_device()                      // top half：只做最急的事
+    schedule_bottom_half()                   // 其他留到之後做
+    restore_registers()
+    return_from_interrupt()                  // 還原 PC 與 mode，回到原程式
+END FUNCTION</code></pre>
+
+      <h3>Timer 保護 CPU</h3>
+      <pre class="pseudo"><code>FUNCTION dispatch(process)
+    set_timer(time_slice)        // privileged instruction
+    switch_to_user_mode_and_run(process)
+END FUNCTION
+
+ON timer_interrupt
+    IF current.total_time > current.limit THEN
+        terminate(current)
+    ELSE
+        scheduler.pick_next()    // multitasking：換下一個
+    END IF
+END ON</code></pre>
+
+      <h2 id="comparison">比較整理</h2>
+      <h3>I/O 與中斷</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>比較</th><th>A</th><th>B</th></tr></thead>
+          <tbody>
+            <tr><td>Polling vs Interrupt</td><td>軟體一直問，CPU 被綁住；裝置多就很慢</td><td>硬體電路檢查一條線，幾乎免費；裝置自己來通知</td></tr>
+            <tr><td>Hardware interrupt vs Trap</td><td>外部裝置發起，非同步</td><td>程式自己造成（exception、system call），同步</td></tr>
+            <tr><td>NMI vs Maskable</td><td>不能關掉，重大錯誤</td><td>可以暫時遮住，一般裝置</td></tr>
+            <tr><td>Top half vs Bottom half</td><td>馬上做、不能被打斷、只做最急的</td><td>CPU 方便時做、可以被打斷、做費時的</td></tr>
+            <tr><td>Interrupt vs DMA</td><td>每筆資料一次中斷，適合少量零散</td><td>每個 block 一次中斷，適合大量整塊</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>電腦架構</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>架構</th><th>組成</th><th>優點</th><th>缺點</th></tr></thead>
+          <tbody>
+            <tr><td>Single-processor</td><td>1 顆 processor、1 個 CPU</td><td>簡單</td><td>同一時間只能跑一個工作</td></tr>
+            <tr><td>SMP</td><td>多顆 processor 共用記憶體</td><td>工作可以分散、地位對等</td><td>搶同一個 main memory</td></tr>
+            <tr><td>Multicore</td><td>一顆 processor 多個 core，共用 L2</td><td>晶片內溝通快、比 SMP 省電且快</td><td>仍然搶 main memory</td></tr>
+            <tr><td>NUMA</td><td>每顆 CPU 有自己的 memory</td><td>減少搶記憶體、好擴充</td><td>存取遠端記憶體比較慢</td></tr>
+            <tr><td>Clustered</td><td>多台完整電腦合作</td><td>高可用、好擴充、成本低</td><td>程式要能平行化、需要 DLM 協調</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>BIOS 與 UEFI、VM 與 Container</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>比較</th><th>A</th><th>B</th></tr></thead>
+          <tbody>
+            <tr><td>BIOS vs UEFI</td><td>boot sector 限 512 bytes，難以支援 GUI、滑鼠；裝新 OS 常蓋掉舊 bootloader</td><td>本身像小 OS，有 GUI、能驅動網卡 USB；ESP 裡每個 OS 各有資料夾，方便多系統</td></tr>
+            <tr><td>VM vs Container</td><td>每台都有完整的 guest OS，GB 等級、啟動慢、隔離程度高</td><td>共用 host 的 kernel，MB 等級、啟動快、隔離程度較低</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="quiz">自我測驗</h2>
+      <details class="quiz">
+        <summary>Q1. 程式執行到除以 0 和使用者按下鍵盤，都會讓 CPU 跳去執行 OS 的程式碼。這兩種中斷分別是同步還是非同步？</summary>
+        <p><strong>答案：</strong>除以 0 是同步（trap / exception），按鍵盤是非同步（hardware interrupt）。</p>
+        <p><strong>原因：</strong>判斷標準是「跟程式執行到哪一行有沒有直接關係」。除以 0 一定是執行到那道除法指令才發生，每次執行都在同一個位置；按鍵盤是外部裝置發出的，隨時可能來，跟程式跑到哪無關。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q2. 為什麼「修改 mode bit」本身必須是 privileged instruction？</summary>
+        <p><strong>答案：</strong>否則應用程式可以自己把 mode bit 改成 kernel mode，dual mode 的保護就完全失效。</p>
+        <p><strong>原因：</strong>dual mode 的前提是 user 程式只能透過 trap / interrupt 進入 kernel mode，而且進去後執行的是 IV 指到的 OS 程式碼。如果程式能直接改 mode bit，就能在 kernel mode 執行任意自己的指令，例如改 interrupt vector 或直接操作硬碟。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q3. 在單核心系統上「暫時關掉 interrupt」可以避免 kernel 資料被同時修改，為什麼在多核心上不夠？</summary>
+        <p><strong>答案：</strong>關中斷只影響自己這顆 CPU，其他核心照樣在跑，還是能存取同一塊 shared memory。</p>
+        <p><strong>原因：</strong>單核心時，關掉中斷就不會被 timer 打斷、不會切換到別的程式，所以手上的指令可以一口氣做完。多核心時其他 CPU 根本不需要「打斷你」，它們本來就同時在執行，所以需要第 06 章介紹的 lock 等同步工具。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q4. 網卡的 ISR 為什麼要拆成 top half 和 bottom half？哪些事情放在 top half？</summary>
+        <p><strong>答案：</strong>因為中斷要快速處理完，但完整處理封包很花時間。top half 只回應硬體、把封包從網卡 buffer 搬進記憶體。</p>
+        <p><strong>原因：</strong>網卡 buffer 很小，不趕快搬走，下一批封包進來就沒地方放而被丟掉。封包一旦進了記憶體就安全了，解析、交給應用程式這些費時的工作晚一點做也沒關係，放在可以被打斷的 bottom half，系統就不會因為處理一個中斷卡太久。</p>
+      </details>
+
+      <h2 id="reading">延伸閱讀</h2>
+      <ul>
+        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter 1 Introduction（Section 1.1 至 1.11）</li>
+        <li>上課投影片：01_OS_Introduction</li>
+        <li>我的筆記：operating system 筆記 p.25 至 p.85</li>
+      </ul>
+
+      <nav class="pager" id="pager"></nav>
+    </main>
+
+    <aside class="toc" id="toc"></aside>
+  </div>
+
+  <footer class="site-footer">OS Notes · 依照 CLAUDE.md 規則持續擴充</footer>
+  <script src="../assets/glossary.js"></script>
+  <script src="../assets/site.js"></script>
+</body>
+</html>

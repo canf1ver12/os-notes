@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<!--
+  新章節模板：
+  1. 複製到 chapters/NN-slug.html
+  2. 換掉所有 {{...}}
+  3. 到 assets/site.js 的 CHAPTERS 登記
+  4. 7 個 h2 區塊的順序與 id 不要改（規則見 CLAUDE.md 第 5 節）
+  5. 交出前刪掉這段註解
+-->
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{NN}} {{中文名稱}} {{English Name}}｜OS 課程筆記</title>
+  <link rel="stylesheet" href="../assets/fonts/fonts.css">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root=".." data-chapter="{{NN-slug}}">
+  <header class="site-header">
+    <a class="brand" href="../index.html">OS notes</a>
+    <button class="menu-btn" id="menu-btn" type="button">章節</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="content">
+      <header class="chapter-head">
+        <p class="eyebrow">CHAPTER {{NN}}</p>
+        <h1>{{中文名稱}}</h1>
+        <p class="en">{{English Name}}</p>
+      </header>
+
+      <h2 id="key-points">本章重點</h2>
+      <div class="summary-box">
+        <ul>
+          <li>{{重點 1}}</li>
+          <li>{{重點 2}}</li>
+          <li>{{重點 3}}</li>
+        </ul>
+      </div>
+
+      <h2 id="concepts">核心觀念</h2>
+      <h3>{{觀念 A}}</h3>
+      <p>{{說明，第一次出現的名詞附英文，並給一個生活化比喻}}</p>
+      <dl class="terms">
+        <dt>{{名詞（English）}}</dt>
+        <dd>{{定義}}</dd>
+      </dl>
+
+      <h2 id="example">實際例子</h2>
+      <p>{{有具體數字或具體程式的例子，一步一步說明}}</p>
+
+      <h2 id="pseudocode">Pseudocode</h2>
+      <pre class="pseudo"><code>FUNCTION {{name}}({{args}})
+    // {{中文註解}}
+END FUNCTION</code></pre>
+
+      <h2 id="comparison">比較整理</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>方法</th><th>優點</th><th>缺點</th><th>適用情境</th></tr></thead>
+          <tbody>
+            <tr><td>{{A}}</td><td></td><td></td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="quiz">自我測驗</h2>
+      <details class="quiz">
+        <summary>Q1. {{題目}}</summary>
+        <p><strong>答案：</strong>{{答案}}</p>
+        <p><strong>原因：</strong>{{原因}}</p>
+      </details>
+      <details class="quiz">
+        <summary>Q2. {{題目}}</summary>
+        <p><strong>答案：</strong>{{答案}}</p>
+        <p><strong>原因：</strong>{{原因}}</p>
+      </details>
+      <details class="quiz">
+        <summary>Q3. {{題目}}</summary>
+        <p><strong>答案：</strong>{{答案}}</p>
+        <p><strong>原因：</strong>{{原因}}</p>
+      </details>
+
+      <h2 id="reading">延伸閱讀</h2>
+      <ul>
+        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter {{N}} {{英文章名}}（Section {{範圍}}）</li>
+        <li>上課投影片：{{投影片檔名}}</li>
+        <li>我的筆記：operating system 筆記 p.{{起}} 至 p.{{迄}}</li>
+      </ul>
+
+      <nav class="pager" id="pager"></nav>
+    </main>
+
+    <aside class="toc" id="toc"></aside>
+  </div>
+
+  <footer class="site-footer">OS Notes · 依照 CLAUDE.md 規則持續擴充</footer>
+  <script src="../assets/glossary.js"></script>
+  <script src="../assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>03 行程 Processes｜OS 課程筆記</title>
+  <link rel="stylesheet" href="../assets/fonts/fonts.css">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root=".." data-chapter="03-processes">
+  <header class="site-header">
+    <a class="brand" href="../index.html">OS notes</a>
+    <button class="menu-btn" id="menu-btn" type="button">章節</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="content">
+      <header class="chapter-head">
+        <p class="eyebrow">CHAPTER 03</p>
+        <h1>行程</h1>
+        <p class="en">Processes</p>
+      </header>
+
+      <h2 id="key-points">本章重點</h2>
+      <div class="summary-box">
+        <ul>
+          <li>program 是硬碟上的檔案，process 是正在執行中的 program；記憶體分成 text、data、heap、stack。</li>
+          <li>process 在 new、ready、running、waiting、terminated 之間切換；OS 用 PCB 記住每個 process，context switch 就是在存、讀 PCB。</li>
+          <li>long-term scheduler 決定誰能進記憶體，short-term scheduler 決定誰上 CPU，medium-term 用 swapping 調整記憶體裡的 process 數量。</li>
+          <li>UNIX 用 fork() 產生 child、exec() 換掉程式、wait() 回收 child，沒被回收的是 zombie，parent 先走的是 orphan。</li>
+          <li>cooperating process 用 IPC 溝通：shared memory 或 message passing；具體工具有 pipe、socket、RPC。</li>
+        </ul>
+      </div>
+
+      <h2 id="concepts">核心觀念</h2>
+
+      <h3>Program 和 Process</h3>
+      <p>program（程式）是一個放在硬碟上的檔案，例如 <code>a.out</code>，它本身不會動。當你執行它，作業系統把它載入記憶體、分配資源、開始一行一行跑，這個「正在跑的東西」才叫做 process（行程）。</p>
+      <p>可以把 program 想成一份食譜，process 是「某個人照著食譜正在做菜」這件事。同一份食譜可以同時有三個人在做，就像同一個程式可以同時開三個 process（例如開了三個瀏覽器視窗），每個人做到第幾步、用了哪些鍋子都不一樣。</p>
+
+      <h3>記憶體配置</h3>
+      <p>一個 process 在記憶體裡大致長這樣：</p>
+      <pre class="diagram">  高位址  ┌────────────────┐
+         │     stack      │  ← 函式呼叫、區域變數，往下長
+         │       ↓        │
+         │                │
+         │       ↑        │
+         │     heap       │  ← malloc() 動態配置，往上長
+         ├────────────────┤
+         │     data       │  ← 全域變數、static 變數
+         ├────────────────┤
+         │     text       │  ← 程式碼本身（唯讀）
+  低位址  └────────────────┘</pre>
+      <div class="callout tip">
+        <strong>記憶技巧</strong>
+        <p>stack 和 heap 從兩端往中間長，中間留空，這樣兩邊都可以彈性變大。遞迴寫太深會 stack overflow，就是 stack 長到撞牆了。</p>
+      </div>
+
+      <h3>五種狀態</h3>
+      <pre class="diagram">              ┌──────── interrupt ─────────┐
+              ▼                            │
+ [new] ──▶ [ready] ──── dispatch ────▶ [running] ─ exit ─▶ [terminated]
+              ▲                            │
+              │                            │ I/O or event wait
+              │                            ▼
+              └──── I/O done ──────────[waiting]</pre>
+      <dl class="terms">
+        <dt>New</dt><dd>正在被建立，還沒準備好。</dd>
+        <dt>Ready</dt><dd>什麼都準備好了，只差 CPU，在 ready queue 排隊。</dd>
+        <dt>Running</dt><dd>正在 CPU 上執行。單核 CPU 同一時間只會有一個 process 在這個狀態。</dd>
+        <dt>Waiting（也叫 Blocked）</dt><dd>在等某件事發生，例如等硬碟讀完、等使用者輸入。這時候就算給它 CPU 也沒用。</dd>
+        <dt>Terminated</dt><dd>執行結束，等作業系統回收資源。</dd>
+      </dl>
+      <div class="callout warn">
+        <strong>常見錯誤</strong>
+        <p>waiting 結束後是回到 <strong>ready</strong>，不是直接回到 running。I/O 做完只代表它又可以排隊了，要不要馬上給它 CPU 是 scheduler 決定的。</p>
+      </div>
+
+      <h3>PCB</h3>
+      <p>作業系統要同時管很多 process，所以每個 process 都有一張「身分證」，叫做 PCB（Process Control Block）。裡面記錄：</p>
+      <ul>
+        <li>process state：現在是五種狀態中的哪一種</li>
+        <li>program counter：下一行要執行的指令位址</li>
+        <li>CPU registers：暫存器的值</li>
+        <li>CPU 排程資訊：優先權、在哪個 queue</li>
+        <li>記憶體管理資訊：page table 等</li>
+        <li>I/O 狀態：開了哪些檔案、用了哪些裝置</li>
+        <li>PID（process ID）和 parent 是誰</li>
+      </ul>
+
+      <h3>Context switch</h3>
+      <p>CPU 要從 process A 換成 process B 時，必須先把 A 現在的狀態存進 A 的 PCB，再把 B 的 PCB 讀出來放回 CPU。這個動作叫 context switch（內容切換）。</p>
+      <p>這就像你在寫作業寫到一半要去接電話，你會先在題目旁邊做記號「寫到第 3 題第 2 步」，講完電話再照記號接著寫。記號就是 PCB，做記號和看記號的時間就是 context switch 的成本。</p>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>context switch 期間 CPU 沒有在做任何使用者的工作，是純粹的 overhead。切換太頻繁，系統反而會變慢。實際花多少時間依硬體和作業系統實作而異，大約是微秒等級。</p>
+      </div>
+
+      <h3>建立 process：fork() 與 exec()</h3>
+      <p>在 UNIX/Linux 上，新的 process 都是由舊的 process 產生的，形成一棵 process tree。</p>
+      <ul>
+        <li><code>fork()</code>：把自己複製一份。呼叫一次，回傳<strong>兩次</strong>：在 parent 裡回傳 child 的 PID（大於 0），在 child 裡回傳 0，失敗回傳 -1。</li>
+        <li><code>exec()</code> 系列：把目前 process 的記憶體內容換成另一個程式，PID 不變。</li>
+        <li><code>wait()</code>：parent 等 child 結束，並回收 child 的資源。</li>
+      </ul>
+      <div class="callout warn">
+        <strong>常見錯誤</strong>
+        <p>child 結束了但 parent 沒有呼叫 <code>wait()</code>，child 的 PCB 會留著，變成 zombie process。如果 parent 先結束，child 會變成 orphan process，在 Linux 上通常會被 <code>init</code>（或 <code>systemd</code>）接手。</p>
+      </div>
+
+
+      <h3>Schedulers</h3>
+      <dl class="terms">
+        <dt>Long-term scheduler（job scheduler）</dt>
+        <dd>決定哪些 process 可以進入記憶體、放進 ready queue（new → ready）。很久才動一次（幾秒到幾分鐘），重點是控制 <strong>degree of multiprogramming</strong>，也就是記憶體裡同時有多少個 process。</dd>
+        <dt>Short-term scheduler（CPU scheduler）</dt>
+        <dd>從 ready queue 挑下一個上 CPU 的 process（ready → running）。每幾毫秒就要做一次，所以一定要快。有些系統只有這一種 scheduler。</dd>
+        <dt>Medium-term scheduler（swapping）</dt>
+        <dd>記憶體被過量使用時，把某個 process 整個移出記憶體（swap out），之後再移回來（swap in），用來降低 degree of multiprogramming。</dd>
+      </dl>
+      <p>記憶體裡要放很多個 process，是因為只放一個的話，它一去等 I/O，CPU 就沒事做。process 分兩種：</p>
+      <ul>
+        <li><strong>I/O-bound</strong>：大部分時間在等 I/O，例如文書編輯器在等你打字。</li>
+        <li><strong>CPU-bound</strong>：大部分時間在運算，例如訓練模型、影片轉檔。</li>
+      </ul>
+      <p>兩種要混合得好：全部 I/O-bound 時 ready queue 常常是空的、CPU 閒著；全部 CPU-bound 時 I/O 裝置閒著，大家都覺得電腦很卡。</p>
+      <p>process 一輩子都在各種 queue 之間搬來搬去：ready queue 和每個裝置各自的 wait queue。queue 其實就是一串用 linked list 串起來的 PCB，換 queue 就等於換狀態。在 Linux 裡 PCB 是一個叫 <code>task_struct</code> 的 C struct，kernel 用 doubly linked list 串起所有 process，並用 <code>current</code> 指標指向正在執行的那一個。</p>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>手機的多工比較受限：早期 iOS 一次只有一個 foreground app 在跑，其他全部暫停，iOS 4 之後才允許有限度的背景執行；Android 則可以用 service 在背景做事。原因是手機的記憶體、電池都比較有限。</p>
+      </div>
+
+      <h3>Process termination</h3>
+      <p>process 執行完最後一行會呼叫 <code>exit()</code>，把狀態值回傳給 parent（parent 用 <code>wait()</code> 拿到），OS 回收它的資源。parent 也可以用 <code>abort()</code> 終止 child，例如 child 用了超過分配的資源、工作已經不需要，或 parent 自己要結束。有些系統不允許 child 在 parent 結束後繼續存在，parent 一結束就把所有子孫一起終止，叫 <strong>cascading termination</strong>。</p>
+
+      <h3>案例：Chrome 的多 process 架構</h3>
+      <p>傳統瀏覽器是單一 process，一個網頁出問題整個瀏覽器一起當掉。Chrome 改成多 process：</p>
+      <ul>
+        <li><strong>Browser process</strong>：管介面、磁碟和網路 I/O。</li>
+        <li><strong>Renderer process</strong>：畫網頁、處理 HTML 和 JavaScript，每個網站一個，跑在 sandbox 裡，限制存取磁碟和網路，就算網頁有惡意程式傷害也很小。</li>
+        <li><strong>Plug-in process</strong>：每種外掛一個。</li>
+      </ul>
+      <p>代價是很佔記憶體、context switch 變多，而且 process 之間要溝通變麻煩，這就需要 IPC。</p>
+
+      <h3>IPC：行程間通訊</h3>
+      <p>process 分成兩種：</p>
+      <ul>
+        <li><strong>Independent process</strong>：不跟別人共用資料，不影響別人也不被影響。</li>
+        <li><strong>Cooperating process</strong>：只要和其他 process 共用資料就算。</li>
+      </ul>
+      <p>需要合作的原因：</p>
+      <ul>
+        <li><strong>Information sharing</strong>：例如從 Chrome 複製一段字貼到 Word。</li>
+        <li><strong>Computation speedup</strong>：把大工作拆開平行做，要有多核心才真的變快。</li>
+        <li><strong>Modularity</strong>：把系統功能拆成好幾個 process。</li>
+      </ul>
+      <p>cooperating process 用 <strong>IPC（inter-process communication）</strong>交換資料，有兩種基本方式：</p>
+      <dl class="terms">
+        <dt>Shared memory</dt>
+        <dd>劃一塊記憶體讓大家共用，process 透過讀寫那塊區域交換資料。建立之後 OS 就不介入，所以很快；但資料格式、位置、避免同時寫入（critical section problem）都要 process 自己處理。</dd>
+        <dt>Message passing</dt>
+        <dd>process 不共用位址空間，透過 OS 提供的 <code>send(message)</code> 和 <code>receive(message)</code> 傳訊息。每次都要經過 kernel，比較慢，但不用自己處理衝突，也特別適合分散式環境。</dd>
+      </dl>
+
+      <h3>Shared memory：Producer-Consumer</h3>
+      <p>用 shared memory 溝通時，通常在共享區域放一個 buffer：<strong>producer</strong> 產生資料放進去，<strong>consumer</strong> 拿出來用。shared memory 是那塊共用的區域本身（白板），buffer 是 process 自己在上面規劃的資料結構（白板上畫的格子和規則）。<strong>unbounded buffer</strong> 大小沒有限制，producer 永遠可以放；<strong>bounded buffer</strong> 大小固定，空了 consumer 要等、滿了 producer 要等。</p>
+      <p>bounded buffer 常用大小為 BUFFER_SIZE 的 <strong>circular array</strong>：</p>
+      <ul>
+        <li><code>in</code>：下一個空位，producer 要放的位置</li>
+        <li><code>out</code>：下一個有資料的位置，consumer 要拿的位置</li>
+        <li>空：<code>in == out</code></li>
+        <li>滿：<code>(in + 1) % BUFFER_SIZE == out</code></li>
+      </ul>
+      <p>為了分得出空和滿，故意空一格，所以最多只能放 BUFFER_SIZE − 1 筆資料。</p>
+
+      <h3>Message passing 的三個設計問題</h3>
+      <dl class="terms">
+        <dt>Naming：Direct communication</dt>
+        <dd>要明確寫出對方的名字：<code>send(P, message)</code>、<code>receive(Q, message)</code>。link 自動建立，一條 link 只連兩個 process。缺點是對象寫死（hard coded），P 換了就要改所有程式碼。</dd>
+        <dt>Naming：Indirect communication</dt>
+        <dd>透過 <strong>mailbox</strong>（也叫 port）交換：<code>send(A, message)</code> 送到 mailbox A。共用同一個 mailbox 才建立 link，一個 mailbox 可以給很多 process 用，送的人不用知道誰會收。如果 P1 送信、P2 和 P3 同時 receive，要靠規則決定：限制一條 link 只連兩個 process、同一時間只允許一個 receive，或由系統選一個並通知送信者。mailbox 可以屬於某個 process（owner 消失 mailbox 就消失）或屬於 OS。</dd>
+        <dt>Synchronization</dt>
+        <dd><strong>blocking send</strong> 送出後等到對方收到才繼續、<strong>blocking receive</strong> 等到有訊息才繼續；<strong>non-blocking send</strong> 送出就走、<strong>non-blocking receive</strong> 有就拿、沒有就拿到 null。send 和 receive 都 blocking 時，雙方要互相等到都到場，叫 <strong>rendezvous</strong>。</dd>
+        <dt>Buffering</dt>
+        <dd>還沒被收走的訊息放在附在 link 上、由 OS 管理的 queue。容量有三種：<strong>zero capacity</strong>（不能放，送的人一定要等收的人）、<strong>bounded capacity</strong>（放 n 個，滿了要等）、<strong>unbounded capacity</strong>（送的人永遠不用等）。</dd>
+      </dl>
+
+      <h3>Pipes</h3>
+      <p>pipe 是一條讓兩個 process 溝通的管道。設計時要考慮：</p>
+      <ul>
+        <li>單向還是雙向？</li>
+        <li>雙向的話是 half-duplex（像對講機，一次一個方向）還是 full-duplex（像電話，兩邊同時講）？</li>
+        <li>一定要有 parent-child 關係嗎？</li>
+        <li>能不能跨網路？</li>
+      </ul>
+      <dl class="terms">
+        <dt>Ordinary pipe</dt>
+        <dd>單向，一定要有 parent-child（血緣）關係。用陣列 fd 表示兩端：<code>fd[0]</code> 是讀取端、<code>fd[1]</code> 是寫入端。parent 用 <code>pipe()</code> 建立後 fork，child 繼承同一組 fd，兩邊就接上同一條管子；沒有血緣關係的 process 拿不到這組 fd。</dd>
+        <dt>Named pipe</dt>
+        <dd>有名字、像檔案一樣存在檔案系統裡，不需要 parent-child 關係，知道路徑就能打開接上，可以有好幾個 process 一起用，通常只能在同一台機器上。UNIX 的 named pipe（FIFO）是 half-duplex，Windows 支援 full-duplex。</dd>
+      </dl>
+      <div class="callout warn">
+        <strong>常見錯誤</strong>
+        <p>fork 之後 parent 和 child 都握有讀寫兩端，要各自 close() 用不到的那端。reader 要等到「所有寫入端都關掉」才會讀到 EOF；如果 child 忘了關自己的 fd[1]，parent 寫完關掉後，child 的 read() 還是會一直等，因為它自己就是那個「還可能寫資料的人」。</p>
+      </div>
+
+      <h3>Socket</h3>
+      <p>socket 讓兩台不同電腦上的程式互相傳訊息。要找到另一台電腦上的某個程式需要兩個資訊：<strong>IP 位址</strong>（哪一台電腦，例如 140.119.168.10）和 <strong>port</strong>（那台電腦上的哪個服務，0 至 65535，1 至 1023 由系統保留給標準服務）。三種 socket：</p>
+      <ul>
+        <li><strong>Connection-oriented（TCP）</strong>：先建立連線再傳，保證送到、順序正確。</li>
+        <li><strong>Connectionless（UDP）</strong>：不建立連線直接丟，快但不保證送到。</li>
+        <li><strong>MulticastSocket</strong>：一次送給多個接收者（例如 239.x.y.z）。</li>
+      </ul>
+      <p><code>127.0.0.1</code> 叫 localhost（loopback），指向自己這台電腦；10.x.x.x、172.16 至 172.31.x.x、192.168.x.x 是只在區域網路有效的私有 IP。</p>
+
+      <h3>RPC：Remote Procedure Call</h3>
+      <p>RPC 讓你像呼叫本地函式一樣呼叫另一台電腦上的函式，常用在分散式系統。關鍵是 <strong>stub</strong>（存根）：</p>
+      <ul>
+        <li><strong>Client 端的 stub</strong>：找到 server、把參數 <strong>marshal</strong>（打包成能在網路上傳的格式）送出。</li>
+        <li><strong>Server 端的 stub</strong>：收到後把參數拆開還原，真的執行那個函式，再把結果送回。</li>
+      </ul>
+      <p>兩台電腦存數字的方式可能不同（big-endian 大的那端先放、little-endian 小的那端先放），所以大家約好中立格式 <strong>XDR（External Data Representation）</strong>：client 先轉成 XDR 送出，server 收到再轉成自己的格式。</p>
+      <p>RPC 可能失敗，也可能被重複執行：</p>
+      <ul>
+        <li><strong>請求在去程弄丟</strong>：server 根本沒收到，沒有執行。</li>
+        <li><strong>回覆在回程弄丟</strong>：server 已經執行了，但 client 以為失敗而重送，結果做了兩次（例如扣款兩次）。</li>
+      </ul>
+      <p>從 client 看這兩種情況一模一樣，所以有兩種保證：</p>
+      <dl class="terms">
+        <dt>At most once</dt>
+        <dd>每個訊息附上 timestamp 當唯一編號，server 記住處理過的編號，重複的就不再執行。保證不會重複，但可能一次都沒做。</dd>
+        <dt>Exactly once</dt>
+        <dd>在 at most once 之上，server 做完要回 ACK，client 沒收到 ACK 就一直重送，直到收到為止。保證剛好執行一次。</dd>
+      </dl>
+
+      <h2 id="example">實際例子</h2>
+      <h3>fork() 之後誰先印？</h3>
+      <pre class="lang-c"><code>#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;sys/wait.h&gt;
+
+int main(void) {
+    int x = 10;
+    pid_t pid = fork();
+
+    if (pid &lt; 0) {
+        perror("fork");
+        return 1;
+    } else if (pid == 0) {
+        x = x + 5;
+        printf("child : pid=%d, x=%d\n", getpid(), x);
+    } else {
+        wait(NULL);
+        printf("parent: pid=%d, child=%d, x=%d\n", getpid(), pid, x);
+    }
+    return 0;
+}</code></pre>
+      <p>預期輸出（PID 每次執行都不同）：</p>
+      <pre><code>child : pid=4012, x=15
+parent: pid=4011, child=4012, x=10</code></pre>
+      <p>一步一步看發生了什麼：</p>
+      <ol>
+        <li><code>fork()</code> 之前只有一個 process，<code>x = 10</code>。</li>
+        <li><code>fork()</code> 之後變成兩個 process，各自有一份 <code>x</code>，值都是 10。</li>
+        <li>child 拿到的 <code>pid</code> 是 0，進入 <code>else if</code>，把<strong>自己的</strong> <code>x</code> 改成 15。</li>
+        <li>parent 拿到的 <code>pid</code> 是 child 的 PID，進入 <code>else</code>，先 <code>wait(NULL)</code> 等 child 結束，所以一定是 child 先印。</li>
+        <li>parent 的 <code>x</code> 還是 10，因為兩個 process 的記憶體是分開的，child 改的是自己那份。</li>
+      </ol>
+      <div class="callout tip">
+        <strong>記憶技巧</strong>
+        <p>如果把 <code>wait(NULL)</code> 拿掉，誰先印就不一定了，要看 scheduler 怎麼排。考試問「輸出順序」時，先找有沒有 <code>wait()</code>。</p>
+      </div>
+
+      <h3>連續 fork() 會有幾個 process？</h3>
+      <pre class="lang-c"><code>#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+
+int main(void) {
+    fork();
+    fork();
+    printf("hi\n");
+    return 0;
+}</code></pre>
+      <p>第一個 <code>fork()</code> 後有 2 個 process，這 2 個都會執行第二個 <code>fork()</code>，各自再分裂一次，變成 4 個。4 個 process 都會執行 <code>printf</code>，所以印出 4 行 <code>hi</code>。一般化：連續 n 個 <code>fork()</code> 會有 2<sup>n</sup> 個 process。</p>
+
+      <h3>Ordinary pipe：parent 寫、child 讀</h3>
+      <pre class="lang-c"><code>#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;sys/wait.h&gt;
+
+int main(void) {
+    int fd[2];
+    char buf[32];
+    pipe(fd);                          /* fd[0] 讀取端，fd[1] 寫入端 */
+    if (fork() == 0) {                 /* child：只讀 */
+        close(fd[1]);
+        ssize_t n = read(fd[0], buf, sizeof(buf) - 1);
+        buf[n] = '\0';
+        printf("child read: %s\n", buf);
+        close(fd[0]);
+    } else {                           /* parent：只寫 */
+        close(fd[0]);
+        const char *msg = "Greetings";
+        write(fd[1], msg, strlen(msg));
+        close(fd[1]);                  /* 關掉寫入端，child 才會讀到 EOF */
+        wait(NULL);
+    }
+    return 0;
+}</code></pre>
+      <p>預期輸出：<code>child read: Greetings</code>。</p>
+      <p>shell 的 <code>ls | grep txt</code> 也是 ordinary pipe：shell 先呼叫 pipe()，再 fork 出兩個 child，一個 exec 成 ls 並把輸出接到寫入端，另一個 exec 成 grep 從讀取端讀。真正溝通的是兩個兄弟 process，它們都從同一個 parent 繼承了那組 fd，所以符合「要有血緣關係」的規則。</p>
+
+      <h3>Circular buffer 最多能放幾筆？</h3>
+      <p>BUFFER_SIZE = 5，一開始 in = out = 0（空）。producer 放了 4 筆後 in = 4，此時 (4 + 1) % 5 = 0 = out，判斷為滿。所以 5 格的 buffer 最多只放 4 筆：如果允許放第 5 筆，in 會繞回 0，和空的時候一樣 in == out，就分不出是空還是滿。</p>
+
+      <h2 id="pseudocode">Pseudocode</h2>
+      <h3>Context switch</h3>
+      <pre class="pseudo"><code>FUNCTION context_switch(old, new)
+    // 1. 把目前 CPU 的狀態存進舊 process 的 PCB
+    old.pcb.program_counter = CPU.pc
+    old.pcb.registers       = CPU.registers
+    old.pcb.state           = READY      // 或 WAITING，看切換原因
+
+    // 2. 把舊 process 放回對應的 queue
+    IF old.pcb.state == READY THEN
+        ready_queue.enqueue(old)
+    ELSE
+        wait_queue.enqueue(old)
+    END IF
+
+    // 3. 從新 process 的 PCB 載入狀態
+    CPU.registers  = new.pcb.registers
+    CPU.pc         = new.pcb.program_counter
+    switch_address_space(new.pcb.page_table)
+    new.pcb.state  = RUNNING
+END FUNCTION</code></pre>
+
+      <h3>Shell 怎麼執行一個指令</h3>
+      <pre class="pseudo"><code>WHILE true
+    command = read_line()
+    pid = fork()
+    IF pid == 0 THEN
+        // child：換成使用者要跑的程式
+        exec(command)
+        print("command not found")   // exec 成功的話不會跑到這行
+        exit(1)
+    ELSE
+        // parent：等 child 跑完再顯示下一個提示字元
+        wait(pid)
+    END IF
+END WHILE</code></pre>
+
+      <h3>Producer-Consumer（shared memory，busy waiting 版本）</h3>
+      <pre class="pseudo"><code>// 共享的變數
+buffer[BUFFER_SIZE]
+in = 0
+out = 0
+
+// Producer
+WHILE true
+    item = produce()
+    WHILE (in + 1) % BUFFER_SIZE == out
+        // buffer 滿了，什麼都不做，一直等
+    END WHILE
+    buffer[in] = item
+    in = (in + 1) % BUFFER_SIZE
+END WHILE
+
+// Consumer
+WHILE true
+    WHILE in == out
+        // buffer 空了，一直等
+    END WHILE
+    item = buffer[out]
+    out = (out + 1) % BUFFER_SIZE
+    consume(item)
+END WHILE</code></pre>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>這個版本只是示範，會浪費 CPU 空轉，而且如果改成用一個 counter 記錄 buffer 裡有幾筆，就會出現 race condition，這是第 06 章同步的出發點。</p>
+      </div>
+
+      <h2 id="comparison">比較整理</h2>
+      <h3>狀態轉換的原因</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>轉換</th><th>什麼時候發生</th><th>例子</th></tr></thead>
+          <tbody>
+            <tr><td>new → ready</td><td>作業系統建立完成，允許它排隊</td><td>剛 <code>fork()</code> 完</td></tr>
+            <tr><td>ready → running</td><td>scheduler 選中它</td><td>輪到它用 CPU</td></tr>
+            <tr><td>running → ready</td><td>被 interrupt 打斷，例如 time slice 用完</td><td>Round Robin 時間到</td></tr>
+            <tr><td>running → waiting</td><td>要等 I/O 或某個 event</td><td>呼叫 <code>read()</code> 讀檔案</td></tr>
+            <tr><td>waiting → ready</td><td>等的事情完成</td><td>硬碟讀完、發出 interrupt</td></tr>
+            <tr><td>running → terminated</td><td>執行完或被殺掉</td><td>呼叫 <code>exit()</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Process 與 Thread</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>比較項目</th><th>Process</th><th>Thread</th></tr></thead>
+          <tbody>
+            <tr><td>記憶體</td><td>各自獨立的位址空間</td><td>同一個 process 內的 thread 共用 code、data、heap</td></tr>
+            <tr><td>各自擁有</td><td>PCB、整套資源</td><td>自己的 stack、registers、program counter</td></tr>
+            <tr><td>建立成本</td><td>高，要複製或建立位址空間</td><td>低</td></tr>
+            <tr><td>溝通方式</td><td>要透過 IPC（pipe、shared memory、message passing）</td><td>直接讀寫共用變數（但要注意同步）</td></tr>
+            <tr><td>一個壞掉</td><td>通常不影響其他 process</td><td>可能讓整個 process 一起掛掉</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>三種 scheduler</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Scheduler</th><th>負責的轉換</th><th>頻率</th><th>重點</th></tr></thead>
+          <tbody>
+            <tr><td>Long-term</td><td>new → ready</td><td>很低（秒到分鐘）</td><td>控制 degree of multiprogramming、混合 I/O-bound 與 CPU-bound</td></tr>
+            <tr><td>Short-term</td><td>ready → running</td><td>很高（毫秒）</td><td>一定要快</td></tr>
+            <tr><td>Medium-term</td><td>swap out / swap in</td><td>記憶體不夠時</td><td>暫時降低記憶體裡的 process 數量</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>IPC 方法</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>方法</th><th>需要血緣關係</th><th>跨機器</th><th>特點</th></tr></thead>
+          <tbody>
+            <tr><td>Shared memory</td><td>否</td><td>否</td><td>建立後不經過 kernel，最快；同步要自己處理</td></tr>
+            <tr><td>Message passing</td><td>否</td><td>可以</td><td>每次經過 kernel，較慢；不用處理衝突</td></tr>
+            <tr><td>Ordinary pipe</td><td>是</td><td>否</td><td>單向，fd[0] 讀、fd[1] 寫</td></tr>
+            <tr><td>Named pipe</td><td>否</td><td>通常否</td><td>有名字、存在檔案系統，UNIX half-duplex、Windows full-duplex</td></tr>
+            <tr><td>Socket</td><td>否</td><td>是</td><td>IP + port，TCP 可靠、UDP 快</td></tr>
+            <tr><td>RPC</td><td>否</td><td>是</td><td>像呼叫本地函式，靠 stub 和 XDR</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="quiz">自我測驗</h2>
+      <details class="quiz">
+        <summary>Q1. 下面的程式會印出幾行 hi？<code>fork(); fork(); fork(); printf("hi\n");</code></summary>
+        <p><strong>答案：</strong>8 行。</p>
+        <p><strong>原因：</strong>每執行一次 <code>fork()</code>，目前存在的每個 process 都會分裂成兩個。1 → 2 → 4 → 8，最後 8 個 process 都會執行 <code>printf</code>。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q2. 一個 process 在 running 狀態時呼叫 <code>scanf()</code> 等使用者輸入，它會變成什麼狀態？使用者按下 Enter 後呢？</summary>
+        <p><strong>答案：</strong>先變成 waiting，使用者輸入完成後變成 ready。</p>
+        <p><strong>原因：</strong>等輸入的時候給它 CPU 也沒用，所以作業系統把它移到 waiting，讓別人用 CPU。輸入完成只代表它可以繼續跑了，但還是要回 ready queue 排隊，等 scheduler 選到它才會再變成 running。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q3. 為什麼 time slice 設得非常小（例如每 1 微秒就切換一次）反而會讓系統變慢？</summary>
+        <p><strong>答案：</strong>因為 context switch 本身要花時間，而且這段時間 CPU 沒有做有用的工作。</p>
+        <p><strong>原因：</strong>如果每次切換的成本和 time slice 差不多長，CPU 幾乎一半的時間都花在存、讀 PCB 上。另外切換後 cache 裡的資料大多是上一個 process 的，新的 process 一開始會一直 cache miss，速度也會變慢。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q4. 在「實際例子」的第一段程式裡，parent 印出的 x 為什麼是 10 而不是 15？</summary>
+        <p><strong>答案：</strong>因為 parent 和 child 的記憶體是分開的。</p>
+        <p><strong>原因：</strong><code>fork()</code> 會幫 child 建立一份 parent 位址空間的複本（實作上通常用 copy-on-write，真的寫入時才複製），child 修改的是自己那份 <code>x</code>，不會影響 parent。如果想讓兩者看到同一份資料，要用 shared memory 之類的 IPC 機制。</p>
+      </details>
+
+      <details class="quiz">
+        <summary>Q5. 用 ordinary pipe 時，child 只負責讀，卻忘了 close(fd[1])。parent 寫完資料並關掉自己的 fd[1] 之後，child 會發生什麼事？</summary>
+        <p><strong>答案：</strong>child 讀完資料後，read() 會一直卡住，永遠等不到 EOF。</p>
+        <p><strong>原因：</strong>OS 要等到所有寫入端都關掉，才會告訴 reader 已經讀完。fork 之後寫入端其實有兩個：parent 的和 child 自己的。child 沒關自己那個，OS 就認為還可能有人寫入，blocking 的 read() 只能一直等。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q6. RPC 呼叫「扣款 100 元」送出後一直沒收到回覆，client 直接重送。在什麼情況下會扣款兩次？要怎麼避免？</summary>
+        <p><strong>答案：</strong>server 其實收到也扣款了，只是回覆在回程弄丟，重送就會再扣一次。可以用 at most once 或 exactly once 語意避免。</p>
+        <p><strong>原因：</strong>client 分不出「server 沒收到」和「server 做了但回覆不見」。at most once 讓每個請求帶唯一的 timestamp，server 看到處理過的編號就不再執行；exactly once 再加上 ACK，client 沒收到 ACK 就重送，server 靠編號擋掉重複，確保剛好執行一次。</p>
+      </details>
+
+      <h2 id="reading">延伸閱讀</h2>
+      <ul>
+        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter 3 Processes（Section 3.1 至 3.8）</li>
+        <li>上課投影片：03_OS_Processes</li>
+        <li>我的筆記：operating system 筆記 p.125 至 p.166</li>
+      </ul>
+
+      <nav class="pager" id="pager"></nav>
+    </main>
+
+    <aside class="toc" id="toc"></aside>
+  </div>
+
+  <footer class="site-footer">OS Notes · 依照 CLAUDE.md 規則持續擴充</footer>
+  <script src="../assets/glossary.js"></script>
+  <script src="../assets/site.js"></script>
+</body>
+</html>

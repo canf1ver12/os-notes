@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>04 執行緒與並行 Threads &amp; Concurrency｜OS 課程筆記</title>
+  <link rel="stylesheet" href="../assets/fonts/fonts.css">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root=".." data-chapter="04-threads">
+  <header class="site-header">
+    <a class="brand" href="../index.html">OS Notes</a>
+    <button class="menu-btn" id="menu-btn" type="button">章節</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="content">
+      <header class="chapter-head">
+        <p class="eyebrow">CHAPTER 04</p>
+        <h1>執行緒與並行</h1>
+        <p class="en">Threads &amp; Concurrency</p>
+      </header>
+
+      <h2 id="key-points">本章重點</h2>
+      <div class="summary-box">
+        <ul>
+          <li>thread 是 CPU 使用的基本單位：同一個 process 的 thread 共享 code、data、heap、檔案，各自有 stack、PC、registers。</li>
+          <li>多執行緒的四個好處：responsiveness、resource sharing、economy、scalability。</li>
+          <li>concurrency 是好幾個任務都有進展，parallelism 是真的同時在跑；Amdahl's law 說明串行部分決定了加速的上限。</li>
+          <li>user thread 要對應到 kernel thread 才能上 CPU，模型有 many-to-one、one-to-one、many-to-many、two-level，主流 OS 用 one-to-one。</li>
+          <li>implicit threading（thread pool、fork-join、OpenMP、GCD）把建立 thread 的工作交給函式庫；還要注意 fork / exec、signal、thread cancellation、TLS 等問題。</li>
+        </ul>
+      </div>
+
+      <h2 id="concepts">核心觀念</h2>
+
+      <h3>Thread 是什麼</h3>
+      <p><strong>Thread</strong> 是 basic unit of CPU utilization：CPU 真正在排班、執行的最小單位其實是 thread。一個 process 裡可以有一個或好幾個 thread。</p>
+      <ul>
+        <li><strong>共享的</strong>：code、data（全域變數）、heap（malloc 出來的東西只要拿到指標，任何 thread 都能存取）、開啟的檔案。</li>
+        <li><strong>各自一份的</strong>：stack、PC、registers。因為每個 thread 執行的函式和進度都不一樣，local variables、函式參數、return address 如果共用一定會互相蓋掉。</li>
+      </ul>
+      <p>比喻：一個 process 像一間廚房（共用冰箱、爐子、食材），thread 是廚房裡的廚師，每個廚師有自己正在做的那道菜和自己的步驟筆記（stack、PC）。</p>
+      <p>適合多執行緒的情境是：工作可以拆成好幾塊，而且各塊不太需要等彼此。例如：</p>
+      <ul>
+        <li>幫一大堆照片做縮圖：每張照片彼此獨立，一張丟給一個 thread。</li>
+        <li>Word：一個 thread 顯示畫面、一個回應鍵盤滑鼠、一個做拼字檢查。</li>
+        <li>瀏覽器：一個 thread 顯示圖片文字、一個從網路抓資料。</li>
+        <li>kernel 本身也是多執行緒：Linux 開機會建立一堆 kernel thread，<code>kthreadd</code>（pid = 2）是其他 kernel thread 的 parent。</li>
+      </ul>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>Linux 在 kernel 裡其實不太區分 process 和 thread，一律叫 task，每個 task 都有一個 task_struct。差別只在建立時和誰共享多少東西：什麼都不共享就是我們說的 process，共享記憶體和檔案就是 thread。</p>
+      </div>
+
+      <h3>多執行緒的四個好處</h3>
+      <dl class="terms">
+        <dt>Responsiveness（回應性）</dt>
+        <dd>程式某部分被 block 或在做很久的事，其他部分還能繼續跑。按下一個很耗時的按鈕時，單執行緒的介面會整個不理你；多執行緒可以把耗時工作丟給另一個 thread，介面照樣回應。</dd>
+        <dt>Resource sharing（資源共享）</dt>
+        <dd>同一個 process 的 thread 預設就共享記憶體和檔案；process 之間要共享，得用 shared memory 或 message passing，而且要特別規劃。</dd>
+        <dt>Economy（經濟）</dt>
+        <dd>建 process 要配記憶體和資源，成本很高；thread 共享所屬 process 的資源，建立和 context switch 都比較便宜，只要換 PC、registers、stack，不用換整個 address space。</dd>
+        <dt>Scalability（可擴展性）</dt>
+        <dd>不同 thread 可以在不同核心上平行跑；單執行緒的 process 不管機器有幾顆核心，都只能用其中一顆。</dd>
+      </dl>
+      <p>例如網站伺服器：每個 request 開一個 process 效能差；改成 server 收到 request 就建一個新 thread 去處理，自己馬上回去聽下一個 request，建立時間短、資源可以共享。但如果開到十萬個 thread 會出問題：</p>
+      <ul>
+        <li><strong>記憶體不夠</strong>：每個 thread 都要一份 stack。</li>
+        <li><strong>切換成本爆炸</strong>：CPU 大部分時間都在 context switch。</li>
+        <li><strong>系統資源有上限</strong>：每個 thread 在 kernel 裡都要佔資料結構。</li>
+      </ul>
+      <p>這也是 thread pool 存在的原因。</p>
+
+      <h3>Concurrency 與 Parallelism</h3>
+      <dl class="terms">
+        <dt>Concurrency（並行）</dt>
+        <dd>好幾個任務都有進展。單核心也做得到：scheduler 快速切換，同一時間核心其實只在跑一個 thread，只是看起來像同時。</dd>
+        <dt>Parallelism（平行）</dt>
+        <dd>好幾個任務真的同時在跑，需要多核心。parallelism 一定也是 concurrency，反過來不一定。</dd>
+      </dl>
+      <p>多核心程式設計的五個挑戰：</p>
+      <ol>
+        <li><strong>Identify tasks</strong>：找出可以平行化的工作。</li>
+        <li><strong>Balance</strong>：每個核心工作量要平均，避免有的過載、有的閒置。</li>
+        <li><strong>Data splitting</strong>：資料也要跟著切，不然 4 個 thread 都從頭掃到尾，等於同一件事做 4 遍。</li>
+        <li><strong>Data dependency</strong>：有些 task 要等別人的結果，要檢查誰依賴誰。</li>
+        <li><strong>Testing and debugging</strong>：thread 交錯順序的組合超多，bug 時有時無。</li>
+      </ol>
+      <dl class="terms">
+        <dt>Data parallelism</dt>
+        <dd>同樣的工作，做在不同的資料上。例如雙核心加總陣列，thread A 加前半、thread B 加後半。</dd>
+        <dt>Task parallelism</dt>
+        <dd>不同的工作，做在同樣（或不同）的資料上。例如兩個 thread 對同一個陣列各自做不同的統計。判斷方式：每個 thread 的動作都一樣只是資料不同就是 data，動作不一樣就是 task。</dd>
+      </dl>
+
+      <h3>Amdahl's Law</h3>
+      <p>一個程式分成兩部分：串行（serial）部分比例是 S，只能一個核心做；平行部分比例是 1 − S，可以平均分給 N 個核心。原本單核心花 1 單位時間，用 N 核心後變成 S + (1 − S) / N，所以：</p>
+      <pre class="diagram">                      1
+speedup  &lt;=  -----------------
+              S + (1 - S) / N
+
+N -> infinity  :  speedup -> 1 / S</pre>
+      <p>重點是：串行部分對加速有決定性的影響。就算核心無限多，最多也只能快 1 / S 倍。</p>
+
+      <h3>User thread 與 Kernel thread</h3>
+      <dl class="terms">
+        <dt>User thread</dt>
+        <dd>由 user space 的 thread library 管理，kernel 不知道它們存在，在 kernel 眼中只是一個普通 process。library 在 process 自己的記憶體裡開一張小表記錄每個 thread 的 PC、registers、stack，自己做切換，所以管理很快（不需要 system call）。缺點是只要其中一個 thread 呼叫會 block 的 system call（例如讀檔），kernel 以為整個 process 在等 I/O，全部一起停。</dd>
+        <dt>Kernel thread</dt>
+        <dd>kernel 直接支援、知道每一個 thread，可以個別排班，一個卡住就換另一個；代價是每個操作都要找 kernel，比較慢。</dd>
+      </dl>
+      <p>CPU 要跑誰只有 kernel 能決定，而 kernel 的 scheduler 只認得自己名冊上的 kernel thread。user thread 要真的跑起來，必須搭在某個被排上 CPU 的 kernel thread 上。可以把 kernel thread 想成上 CPU 的通行證。</p>
+
+      <h3>Multithreading models</h3>
+      <dl class="terms">
+        <dt>Many-to-One</dt>
+        <dd>多個 user thread 對應到一個 kernel thread，用在不支援 kernel thread 的系統。thread 管理都在 user space，效率高；但一個 block 全部 block，而且同一時間只有一個能上 CPU，沒辦法利用多核心。</dd>
+        <dt>One-to-One</dt>
+        <dd>每個 user thread 對應一個 kernel thread。concurrency 比較好，一個 block 可以換別的，也能在多核心上平行跑；缺點是建一個 user thread 就要建一個 kernel thread，數量太多會拖累系統。Linux、Windows 等主流 OS 幾乎都用這個模型。</dd>
+        <dt>Many-to-Many</dt>
+        <dd>多個 user thread 對應到數量較少或相等的 kernel thread，OS 決定要開幾個 kernel thread。兼顧兩邊優點但很難實作；核心數變多後必要性降低，不過常被 implicit threading 拿來用。</dd>
+        <dt>Two-level model</dt>
+        <dd>many-to-many 的變形，大部分照 many-to-many，但允許某個 user thread 綁定（bound）到一個專屬的 kernel thread。</dd>
+      </dl>
+
+      <h3>Thread libraries</h3>
+      <ul>
+        <li><strong>Pthreads</strong>：POSIX 標準（IEEE 1003.1c）定義的 API 規格，Linux、macOS 都有實作。可以是 user-level 或 kernel-level library。</li>
+        <li><strong>Windows threads</strong>（Win32）：Windows 的 kernel-level library。依投影片標示，這部分不考。</li>
+        <li><strong>Java threads</strong>：由 JVM 管理，底層用宿主 OS 的 thread library 實作。</li>
+      </ul>
+      <p>兩種用法：</p>
+      <ul>
+        <li><strong>Asynchronous threading</strong>：parent 建好 child thread 就繼續做自己的事，彼此幾乎不共享資料。</li>
+        <li><strong>Synchronous threading</strong>：parent 要等所有 child 結束（join）才繼續，通常 child 有算出結果要交給 parent。因為 thread 不容易有回傳值，範例常用全域變數放結果。</li>
+      </ul>
+
+      <h3>Implicit threading</h3>
+      <p>thread 數量一多，正確地管理它們很難，所以把建立和管理 thread 的工作交給編譯器和函式庫，程式設計師只要找出可以平行的 task。</p>
+      <dl class="terms">
+        <dt>Thread pool</dt>
+        <dd>啟動時先建好一批 thread 放在池子裡等工作，有 task 就交給一個閒置的 thread，做完回池子。用現成的 thread 比臨時建立快，也限制了 thread 的總數；而且把「執行 task」和「建立 task」分開，可以用不同策略執行，例如延遲或週期性執行。</dd>
+        <dt>Fork-Join</dt>
+        <dd>主 thread fork 出好幾個子 task，等它們都做完再 join 合併結果。常見寫法是遞迴：問題太大就切兩半丟出去，切到夠小才直接算（Java 的 ForkJoinPool）。</dd>
+        <dt>OpenMP</dt>
+        <dd>在 C / C++ 程式裡用 <code>#pragma omp parallel</code> 標記平行區塊，compiler 看到後會自動建立和核心數一樣多的 thread。</dd>
+        <dt>Grand Central Dispatch（GCD）</dt>
+        <dd>Apple 的技術，把 task 放進 dispatch queue，由系統用 thread pool 取出來執行，就是 queue + thread pool。</dd>
+      </dl>
+
+      <h3>Threading issues</h3>
+      <dl class="terms">
+        <dt>fork() 與 exec() 的語意</dt>
+        <dd>多執行緒的 process 裡某個 thread 呼叫 fork()，新的 process 要複製所有 thread 還是只複製呼叫的那一個？有些 Unix 兩種版本都提供。如果 fork 之後馬上 exec()，整個程式都會被換掉，那只複製呼叫的 thread 就夠了。</dd>
+        <dt>Signal handling</dt>
+        <dd>signal 用來通知 process 某個事件發生。synchronous signal（例如除以 0、非法存取記憶體）是程式自己造成的，送給造成它的那個 thread；asynchronous signal（例如按 Ctrl-C）跟程式跑到哪一行無關，可以送給所有 thread、特定 thread，或指定一個 thread 專門接收。</dd>
+        <dt>Thread cancellation</dt>
+        <dd>在 thread 做完前就終止它（target thread）。<strong>asynchronous cancellation</strong> 立刻終止，可能留下做到一半的資料或沒釋放的資源；<strong>deferred cancellation</strong> 只是插一面旗子，target 自己在 cancellation point 檢查到才安全地結束。Pthreads 的 <code>pthread_cancel</code> 只是提出請求，預設是 deferred；Java 用 <code>interrupt()</code>。</dd>
+        <dt>Thread-Local Storage（TLS）</dt>
+        <dd>每個 thread 自己一份、但在函式之間都看得到的資料，介於 local 變數（函式結束就消失）和全域變數（大家共用）之間。例如交易系統裡每個 thread 處理的交易編號。</dd>
+      </dl>
+
+      <h2 id="example">實際例子</h2>
+      <h3>Amdahl's law 算一次</h3>
+      <p>假設一個程式 25% 是串行（S = 0.25），75% 可以平行：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">核心數 N</th><th>計算</th><th class="num">speedup</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>1 / (0.25 + 0.75)</td><td class="num">1.00</td></tr>
+            <tr><td class="num">2</td><td>1 / (0.25 + 0.375)</td><td class="num">1.60</td></tr>
+            <tr><td class="num">4</td><td>1 / (0.25 + 0.1875)</td><td class="num">2.29</td></tr>
+            <tr><td class="num">8</td><td>1 / (0.25 + 0.09375)</td><td class="num">2.91</td></tr>
+            <tr class="best"><td class="num">∞</td><td>1 / 0.25</td><td class="num">4.00</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>核心從 1 個加到 8 個，速度只快了不到 3 倍；就算無限多核心，也不會超過 4 倍。想再變快，要想辦法縮小串行的部分。</p>
+
+      <h3>Pthreads：用另一個 thread 算 1 加到 N</h3>
+      <pre class="lang-c"><code>#include &lt;pthread.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+int sum;                       /* thread 共享的全域變數 */
+void *runner(void *param);
+
+int main(int argc, char *argv[]) {
+    pthread_t tid;
+    pthread_attr_t attr;
+    if (argc != 2) {
+        fprintf(stderr, "usage: %s &lt;n&gt;\n", argv[0]);
+        return 1;
+    }
+    pthread_attr_init(&amp;attr);                      /* 預設屬性 */
+    pthread_create(&amp;tid, &amp;attr, runner, argv[1]);  /* 建立 thread */
+    pthread_join(tid, NULL);                       /* 等它做完 */
+    printf("sum = %d\n", sum);
+    return 0;
+}
+
+void *runner(void *param) {
+    int upper = atoi(param);
+    sum = 0;
+    for (int i = 1; i &lt;= upper; i++)
+        sum += i;
+    pthread_exit(0);
+}</code></pre>
+      <p>編譯與執行：<code>gcc sum.c -o sum -pthread</code>，<code>./sum 10</code> 印出 <code>sum = 55</code>。</p>
+      <ol>
+        <li>main 用 <code>pthread_create</code> 建立新的 thread，指定它從 <code>runner</code> 開始跑，參數是 "10"。</li>
+        <li>兩個 thread 共用全域變數 <code>sum</code>，runner 把結果寫進去。這就是用全域變數「回傳」結果的原因。</li>
+        <li>main 用 <code>pthread_join</code> 等 runner 結束（synchronous threading），所以印出時一定已經算完。拿掉 join 的話，main 可能在 runner 算完前就印出 0。</li>
+      </ol>
+
+      <h2 id="pseudocode">Pseudocode</h2>
+      <h3>Thread pool</h3>
+      <pre class="pseudo"><code>FUNCTION create_pool(k)
+    queue = empty task queue
+    FOR i = 1 TO k
+        create_thread(worker)            // 一開始就建好 k 個
+    END FOR
+END FUNCTION
+
+FUNCTION worker()
+    WHILE true
+        task = queue.take()              // 沒工作就睡著等
+        task.run()                       // 做完回來接下一個
+    END WHILE
+END FUNCTION
+
+FUNCTION submit(task)
+    queue.put(task)                      // 不用為每個 task 建新 thread
+END FUNCTION</code></pre>
+
+      <h3>Fork-Join：遞迴加總陣列</h3>
+      <pre class="pseudo"><code>FUNCTION sum(array, lo, hi)
+    IF hi - lo &lt;= THRESHOLD THEN
+        // 工作夠小了，直接算
+        RETURN array[lo] + ... + array[hi]
+    END IF
+    mid = (lo + hi) / 2
+    left  = fork( sum(array, lo, mid) )      // 丟給別的 thread
+    right = sum(array, mid + 1, hi)          // 自己做右半
+    RETURN join(left) + right                // 等左半做完再合併
+END FUNCTION</code></pre>
+
+      <h3>Deferred cancellation</h3>
+      <pre class="pseudo"><code>// 提出取消的一方
+pthread_cancel(target)                   // 只是插一面旗子
+
+// target thread
+WHILE has_more_work()
+    do_one_step()
+    IF cancel_requested() THEN           // cancellation point
+        release_resources()              // 安全地收尾
+        pthread_exit()
+    END IF
+END WHILE</code></pre>
+
+      <h2 id="comparison">比較整理</h2>
+      <h3>Multithreading models</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>模型</th><th>對應方式</th><th>一個 block 時</th><th>能用多核心</th><th>缺點</th></tr></thead>
+          <tbody>
+            <tr><td>Many-to-One</td><td>多個 user → 1 個 kernel</td><td>全部 block</td><td>不能</td><td>無法平行</td></tr>
+            <tr class="best"><td>One-to-One</td><td>1 個 user → 1 個 kernel</td><td>其他照常</td><td>能</td><td>kernel thread 太多拖累系統</td></tr>
+            <tr><td>Many-to-Many</td><td>多個 user → 較少或相等的 kernel</td><td>其他照常</td><td>能</td><td>很難實作</td></tr>
+            <tr><td>Two-level</td><td>many-to-many 加上 bound thread</td><td>其他照常</td><td>能</td><td>更複雜</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>其他常考的對照</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>比較</th><th>A</th><th>B</th></tr></thead>
+          <tbody>
+            <tr><td>Process vs Thread</td><td>獨立 address space，建立和切換成本高，一個掛掉通常不影響別人</td><td>共享 code、data、heap、檔案，各自 stack 與 registers，成本低但要注意同步</td></tr>
+            <tr><td>Concurrency vs Parallelism</td><td>都有進展，單核心靠切換也做得到</td><td>真的同時跑，需要多核心</td></tr>
+            <tr><td>Data vs Task parallelism</td><td>同樣的動作、不同的資料</td><td>不同的動作</td></tr>
+            <tr><td>User vs Kernel thread</td><td>library 管理、快，但 kernel 看不到，一個 block 全部停</td><td>kernel 管理、可以個別排班，但每個操作都要 system call</td></tr>
+            <tr><td>Asynchronous vs Deferred cancellation</td><td>立刻終止，資源可能沒釋放</td><td>等 target 在 cancellation point 自己結束，比較安全</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="quiz">自我測驗</h2>
+      <details class="quiz">
+        <summary>Q1. 同一個 process 裡的兩個 thread，下列哪些是共享的：全域變數、區域變數、malloc 出來的記憶體、program counter、開啟的檔案？</summary>
+        <p><strong>答案：</strong>共享的是全域變數、malloc 出來的記憶體（heap）、開啟的檔案；區域變數和 program counter 各自一份。</p>
+        <p><strong>原因：</strong>區域變數放在 stack，每個 thread 正在執行的函式和進度都不同，共用 stack 會互相蓋掉 return address 和變數，所以 stack、PC、registers 一定要各自一份。其他屬於 process 的資源（code、data、heap、檔案）都共享。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q2. 一個程式有 40% 是串行的，用 4 核心大約能快幾倍？核心無限多呢？</summary>
+        <p><strong>答案：</strong>4 核心約 1.82 倍；無限多核心最多 2.5 倍。</p>
+        <p><strong>原因：</strong>S = 0.4，speedup = 1 / (0.4 + 0.6 / 4) = 1 / 0.55 ≈ 1.82。N 趨近無限大時 0.6 / N → 0，speedup → 1 / 0.4 = 2.5。串行比例越大，多加核心的效果越差。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q3. 在 many-to-one 模型下，為什麼一個 thread 讀檔案會讓整個 process 都停住？</summary>
+        <p><strong>答案：</strong>因為 kernel 只看到一個 kernel thread（一個執行單位），它進入 waiting 時，藏在後面的所有 user thread 都跟著停。</p>
+        <p><strong>原因：</strong>讀檔是 blocking system call，kernel 把這個唯一的 kernel thread 移到 wait queue。kernel 不知道 process 裡還有其他 user thread 可以跑，library 也拿不到 CPU 去切換，所以全部卡住。one-to-one 模型下其他 thread 各有自己的 kernel thread，就不會被拖累。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q4. 單核心電腦上跑多執行緒的程式，有 concurrency 嗎？有 parallelism 嗎？</summary>
+        <p><strong>答案：</strong>有 concurrency，沒有 parallelism。</p>
+        <p><strong>原因：</strong>scheduler 快速在 thread 之間切換，每個 thread 都有進展，所以是 concurrency；但同一時間只有一個核心、只能執行一個 thread，沒有真正同時在跑，所以沒有 parallelism。多執行緒在單核心上仍然有好處，例如介面不會因為一個耗時工作卡住（responsiveness）。</p>
+      </details>
+
+      <h2 id="reading">延伸閱讀</h2>
+      <ul>
+        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter 4 Threads &amp; Concurrency（Section 4.1 至 4.6）</li>
+        <li>上課投影片：04_OS_ThreadsConcurrency（Win32 Threads 標示不考）</li>
+        <li>我的筆記：operating system 筆記 p.167 至 p.200</li>
+      </ul>
+
+      <nav class="pager" id="pager"></nav>
+    </main>
+
+    <aside class="toc" id="toc"></aside>
+  </div>
+
+  <footer class="site-footer">OS Notes · 依照 CLAUDE.md 規則持續擴充</footer>
+  <script src="../assets/glossary.js"></script>
+  <script src="../assets/site.js"></script>
+</body>
+</html>
