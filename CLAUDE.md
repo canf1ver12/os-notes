@@ -72,7 +72,8 @@ os-notes/
 │   ├── 04-threads.html
 │   ├── 05-cpu-scheduling.html
 │   ├── 06-synchronization.html
-│   └── 07-sync-examples.html
+│   ├── 07-sync-examples.html
+│   └── 08-deadlocks.html
 └── templates/
     └── chapter.html        ← 新章節的起始模板，複製它來用
 ```
@@ -187,7 +188,7 @@ OS 很多主題都有好幾種解法（排程演算法、同步機制、置換�
 
 ### 線條插圖 ICONS
 
-插圖放在 `assets/site.js` 的 `ICONS` 物件，目前有：`monitor`、`clock`、`lock`、`chip`、`layers`、`threads`、`table`（圓桌和筷子）、`planet`、`moon`、`disk`、`sparkle`。
+插圖放在 `assets/site.js` 的 `ICONS` 物件，目前有：`monitor`、`clock`、`lock`、`chip`、`layers`、`threads`、`table`（圓桌和筷子）、`cycle`（兩個繞成一圈的箭頭，循環等待）、`planet`、`moon`、`disk`、`sparkle`。
 新章節優先從現有的挑一個最貼近主題的。如果都不合適，可以新增一個，規則是：
 
 - `viewBox="0 0 64 64"`，只寫形狀內容，外層 `<svg>` 由 `icon()` 函式產生。
@@ -265,6 +266,12 @@ OS 很多主題都有好幾種解法（排程演算法、同步機制、置換�
 | bounded buffer | bounded buffer（有限緩衝區） |
 | readers-writers problem | readers-writers problem（讀者寫者問題） |
 | dining-philosophers problem | dining-philosophers problem（哲學家用餐問題） |
+| hold and wait / no preemption / circular wait | hold and wait（持有並等待）/ no preemption（不可搶奪）/ circular wait（循環等待） |
+| resource-allocation graph | resource-allocation graph（資源配置圖，RAG） |
+| safe state | safe state（安全狀態） |
+| banker's algorithm | banker's algorithm（銀行家演算法） |
+| wait-for graph | wait-for graph（等待圖） |
+| deadlock prevention / avoidance / detection | deadlock prevention（預防）/ avoidance（避免）/ detection（偵測） |
 | mutex | mutex lock（互斥鎖） |
 | page / frame | page（分頁）/ frame（頁框） |
 | virtual memory | virtual memory（虛擬記憶體） |
@@ -323,9 +330,9 @@ OS 很多主題都有好幾種解法（排程演算法、同步機制、置換�
 | 03 | 行程 Processes | 03_OS_Processes | p.125 至 p.166 | ✅ |
 | 04 | 執行緒與並行 Threads & Concurrency | 04_OS_ThreadsConcurrency | p.167 至 p.200 | ✅ |
 | 05 | CPU 排程 CPU Scheduling | 05_OS_CPU_Scheduling | p.201 至 p.233 | ✅ |
-| 06 | 同步工具 Synchronization Tools | 06-07_OS_Synchronization_Tools & Synchronization_Examples-1、-2（p.1 至 p.11、p.21 至 p.27、p.39 至 p.41） | 尚無 | ✅ |
+| 06 | 同步工具 Synchronization Tools | 06-07_OS_Synchronization_Tools & Synchronization_Examples-1、-2（p.1 至 p.10、p.21 至 p.27、p.39 至 p.41） | 尚無 | ✅ |
 | 07 | 同步範例 Synchronization Examples | 06-07_OS_Synchronization_Tools & Synchronization_Examples-2（p.11 至 p.20、p.23、p.28 至 p.38） | 尚無 | ✅ |
-| 08 | 死結 Deadlocks | 待上課 | | ⬜ |
+| 08 | 死結 Deadlocks | 08_OS_Deadlocks（p.1 至 p.44） | 尚無 | ✅ |
 | 09 | 主記憶體 Main Memory | 待上課 | | ⬜ |
 | 10 | 虛擬記憶體 Virtual Memory | 待上課 | | ⬜ |
 | 11 至 15 | 儲存、I/O 與檔案系統 | 待上課 | | ⬜ |
