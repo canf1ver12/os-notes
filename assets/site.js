@@ -937,7 +937,10 @@ function warpTo(href, color, x, y) {
           if (d < best) { best = d; hit = b; }
         });
       }
+      const changed = hit && !hit.classList.contains("lit");
       blocks.forEach((b) => b.classList.toggle("lit", b === hit));
+      // 通知右側「本頁目錄」：目錄的高亮一律跟著亮起來的區塊走
+      if (changed) document.dispatchEvent(new CustomEvent("os-notes:section", { detail: hit.dataset.sec }));
     };
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(lightUp); } };
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -1093,14 +1096,12 @@ function warpTo(href, color, x, y) {
     toc.innerHTML = `<h4>On this page</h4><ol>${headings.map((h, i) =>
       `<li><a href="#${h.id}" data-id="${h.id}" data-n="${String(i + 1).padStart(2, "0")}">${h.textContent}</a></li>`).join("")}</ol>`;
     const links = toc.querySelectorAll("a");
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((e) => {
-        if (e.isIntersecting) {
-          links.forEach((a) => a.classList.toggle("active", a.dataset.id === e.target.id));
-        }
-      });
-    }, { rootMargin: "-90px 0px -70% 0px" });
-    headings.forEach((h) => observer.observe(h));
+    // 不用 IntersectionObserver 盯 h2：它只在 h2 經過畫面時才觸發，往上捲回上一段時，
+    // 要捲到那一段的開頭才會更新。改成跟著段落分區的 .lit（畫面 40% 那條線所在的區塊）
+    const setActive = (id) => links.forEach((a) => a.classList.toggle("active", a.dataset.id === id));
+    document.addEventListener("os-notes:section", (e) => setActive(e.detail));
+    const lit = document.querySelector(".sec-block.lit");
+    if (lit) setActive(lit.dataset.sec);
   }
 
   /* ---------- 章節頁：標題列的「名詞查詢」和「HOME」按鈕 ---------- */
