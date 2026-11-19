@@ -14,6 +14,7 @@
 | 04 | 執行緒與並行 Threads & Concurrency |
 | 05 | CPU 排程 CPU Scheduling |
 | 06 | 同步工具 Synchronization Tools |
+| 07 | 同步範例 Synchronization Examples |
 
 章節編號和課本《Operating System Concepts》一致，內容依據上課投影片和我的筆記整理
 
