@@ -314,6 +314,8 @@ function clearHighlights() {
     m.replaceWith(...m.childNodes);
     parent.normalize();
   });
+  // 筆記的畫線（mark.note-hl）不能拆掉，只清掉本章搜尋加上的狀態
+  document.querySelectorAll("mark.note-hl.cur, mark.note-hl.note-match").forEach((m) => m.classList.remove("cur", "note-match"));
 }
 const normalize = (t) => (t || "").toLowerCase().replace(/[\s_\-()（）'’「」]/g, "");
 const chapterBySlug = (slug) => CHAPTERS.find((c) => c.slug === slug);
@@ -367,7 +369,10 @@ function setupLookup(root, current) {
         <div class="lookup-body" id="lookup-body"></div>
       </div>
     </div>
-    <button class="sel-bubble" id="sel-bubble" type="button" hidden></button>`);
+    <div class="sel-bubble" id="sel-bubble" hidden>
+      <button type="button" data-act="lookup"></button>
+      <button type="button" data-act="note">畫線加筆記</button>
+    </div>`);
 
   const box = document.getElementById("lookup");
   const input = document.getElementById("lookup-input");
@@ -411,7 +416,35 @@ function setupLookup(root, current) {
     }));
   };
 
+  /* 名詞查詢的結果下面，再列出內容符合的「你的筆記」 */
+  const appendNoteHits = (q) => {
+    const hits = searchNotes(q).slice(0, 6);
+    if (!hits.length) return;
+    const wrap = document.createElement("div");
+    wrap.className = "lookup-notes";
+    wrap.innerHTML = `<p class="ln-title">你的筆記</p><ul class="lookup-list">${hits.map((h, i) => `
+      <li><a href="${root}/chapters/${h.chapter}.html?${h.type === "nb" ? "notebook=1" : `note=${encodeURIComponent(h.id)}`}" data-i="${i}">
+        <span class="lt">${h.type === "nb" ? "整章筆記本" : esc(noteSnippet(h.quote, q, 40))}</span>${chip(h.chapter)}
+        <span class="ld">${esc(noteSnippet(h.type === "nb" ? h.text : (h.note || "（只有畫線）"), q, 120))}</span>
+      </a></li>`).join("")}</ul>`;
+    wrap.querySelectorAll("a").forEach((a) => a.addEventListener("click", (e) => {
+      const h = hits[Number(a.dataset.i)];
+      if (h.chapter !== current) return;
+      // 就在這一章：不重新載入，直接跳過去
+      e.preventDefault();
+      close();
+      if (h.type === "nb" || !focusNote(h.id)) document.querySelector('.notes-btn').click();
+    }));
+    const fa = body.querySelector(".lookup-findall");
+    if (fa) body.insertBefore(wrap, fa); else body.appendChild(wrap);
+  };
+
   const render = async (query) => {
+    await renderTerms(query);
+    const q = query.trim();
+    if (q && input.value.trim() === q && !body.querySelector(".lookup-notes")) appendNoteHits(q);
+  };
+  const renderTerms = async (query) => {
     const q = query.trim();
     store.set(KEY_QUERY, q);
     if (!q) {
@@ -589,6 +622,7 @@ function setupLookup(root, current) {
     if (!q) { clearHighlights(); findState = { marks: [], i: 0, term: "", mode: "all", total: 0, keyTotal: 0, section: "", terms: "" }; renderFindRes(); return; }
     findAll(q, "", "all");
     findState.terms = q;
+    addNoteMatches(q);
     renderFindRes();
   }
   // 只更新輸入框右邊的結果區，輸入框本身不重畫，打字才不會被打斷
@@ -596,8 +630,15 @@ function setupLookup(root, current) {
     const res = findBar.querySelector(".fb-res");
     const q = findInput.value.trim();
     const n = findState.marks.length;
+    const inNotebook = current && q.length >= 2 && Notes.notebook(current).toLowerCase().includes(q.toLowerCase());
+    const nbBtn = inNotebook ? `<button type="button" class="rb-mode" data-act="nb">整章筆記本也有</button>` : "";
     if (!q) { res.innerHTML = `<span class="fb-hint">Enter 下一處 · Shift+Enter 上一處</span>`; return; }
-    if (!n) { res.innerHTML = `<span class="fb-hint">${q.length < 2 ? "至少輸入兩個字" : `這一章找不到「${esc(q)}」`}</span>`; return; }
+    if (!n) {
+      res.innerHTML = `<span class="fb-hint">${q.length < 2 ? "至少輸入兩個字" : `這一章找不到「${esc(q)}」`}</span>${nbBtn}`;
+      const b = res.querySelector('[data-act="nb"]');
+      if (b) b.addEventListener("click", () => document.querySelector(".notes-btn").click());
+      return;
+    }
     res.innerHTML = `
       <span class="rb-nav">
         <button type="button" data-act="prev" aria-label="上一處">↑</button>
@@ -605,11 +646,13 @@ function setupLookup(root, current) {
         <button type="button" data-act="next" aria-label="下一處">↓</button>
       </span>
       ${findState.mode === "key" && findState.total > n ? `<button type="button" class="rb-mode" data-act="all">顯示全部 ${findState.total} 處</button>` : ""}
-      ${findState.mode === "all" && findState.keyTotal > 0 && findState.keyTotal < findState.total ? `<button type="button" class="rb-mode" data-act="key">只看重點 ${findState.keyTotal} 處</button>` : ""}`;
+      ${findState.mode === "all" && findState.keyTotal > 0 && findState.keyTotal < findState.total ? `<button type="button" class="rb-mode" data-act="key">只看重點 ${findState.keyTotal} 處</button>` : ""}
+      ${findState.noteCount ? `<span class="fb-hint">含 ${findState.noteCount} 則筆記</span>` : ""}${nbBtn}`;
     const on = (act, fn) => { const el = res.querySelector(`[data-act="${act}"]`); if (el) el.addEventListener("click", fn); };
     on("prev", () => { focusMark(-1); renderFindRes(); });
     on("next", () => { focusMark(1); renderFindRes(); });
-    on("all", () => { findAll(findState.term, "", "all"); findState.terms = q; renderFindRes(); });
+    on("all", () => { findAll(findState.term, "", "all"); findState.terms = q; addNoteMatches(q); renderFindRes(); });
+    on("nb", () => document.querySelector(".notes-btn").click());
     on("key", () => { findAll(findState.term, "", "key"); findState.terms = q; renderFindRes(); });
   }
   function openFind(q) {
@@ -681,25 +724,699 @@ function setupLookup(root, current) {
 
   /* 反白內文中的名詞，旁邊跳出「查詢」 */
   const main = document.querySelector("main.content");
+  /* 反白之後，旁邊跳出「查詢」（40 字以內才有）和「畫線加筆記」 */
+  const lookupPart = bubble.querySelector('[data-act="lookup"]');
+  let bubbleRange = null;
+  const showBubble = () => {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().trim() : "";
+    if (!text || text.length > 2000 || !sel.rangeCount || !main.contains(sel.anchorNode) || !main.contains(sel.focusNode)) { bubble.hidden = true; return; }
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    bubbleRange = range.cloneRange();
+    lookupPart.hidden = text.length > 40;
+    lookupPart.textContent = `查詢「${text.length > 16 ? text.slice(0, 16) + "..." : text}」`;
+    bubble.dataset.q = text;
+    bubble.style.left = `${Math.max(120, Math.min(window.innerWidth - 140, rect.left + rect.width / 2))}px`;
+    bubble.style.top = `${Math.max(64, rect.top - 10)}px`;
+    bubble.hidden = false;
+  };
   document.addEventListener("mouseup", (e) => {
-    if (e.target === bubble) return;
-    setTimeout(() => {
-      const sel = window.getSelection();
-      const text = sel ? sel.toString().trim() : "";
-      if (!text || text.length > 40 || !sel.rangeCount || !main.contains(sel.anchorNode)) { bubble.hidden = true; return; }
-      const rect = sel.getRangeAt(0).getBoundingClientRect();
-      bubble.textContent = `查詢「${text.length > 16 ? text.slice(0, 16) + "..." : text}」`;
-      bubble.dataset.q = text;
-      bubble.style.left = `${Math.min(window.innerWidth - 200, rect.left + rect.width / 2)}px`;
-      bubble.style.top = `${rect.top - 10}px`;
-      bubble.hidden = false;
-    }, 10);
+    if (bubble.contains(e.target)) return;
+    setTimeout(showBubble, 10);
   });
+  // 手機、平板沒有 mouseup：選取停下來之後再顯示
+  let selTimer = null;
+  if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) {
+    document.addEventListener("selectionchange", () => { clearTimeout(selTimer); selTimer = setTimeout(showBubble, 450); });
+  }
   document.addEventListener("scroll", () => { bubble.hidden = true; }, { passive: true });
-  bubble.addEventListener("click", () => {
+  bubble.addEventListener("mousedown", (e) => e.preventDefault());   // 按按鈕時不要把反白取消掉
+  lookupPart.addEventListener("click", () => {
     bubble.hidden = true;
     open(bubble.dataset.q);
   });
+  bubble.querySelector('[data-act="note"]').addEventListener("click", () => {
+    bubble.hidden = true;
+    startNoteFromRange(bubbleRange);
+  });
+}
+
+/* =========================================================
+   筆記：反白畫線加註解、整章筆記本、筆記總覽，並用 GitHub Gist 跨電腦同步
+   資料一律先存在這台電腦的 localStorage（離線也能寫）；
+   使用者在「同步設定」貼上只有 gist 權限的 token 後，才會和他自己帳號下的 secret gist 合併。
+   合併規則：每一筆用 updated 時間比較，新的贏；刪除會留下 deleted 記號，才不會被另一台電腦加回來。
+   ========================================================= */
+const NOTES_KEY = "os-notes-notes";     // 筆記資料（localStorage）
+const SYNC_KEY = "os-notes-sync";       // 同步設定：token、gist id、上次同步時間（localStorage）
+const GIST_FILE = "os-notes.json";
+const GIST_DESC = "OS Notes 筆記同步（由 OS 課程筆記站自動建立）";
+const TOKEN_URL = "https://github.com/settings/tokens/new?scopes=gist&description=OS%20Notes%20sync";
+const lstore = {
+  get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (err) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (err) { return false; } }
+};
+const escapeHtml = (t) => String(t == null ? "" : t).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+const newNoteId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const emptyNotes = () => ({ v: 1, items: {} });
+const notesSig = (d) => Object.values((d && d.items) || {}).map((x) => `${x.id}:${x.updated || 0}`).sort().join("|");
+const fmtTime = (ts) => ts ? new Date(ts).toLocaleString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+
+function mergeNotes(a, b) {
+  const items = Object.assign({}, a.items);
+  Object.values((b && b.items) || {}).forEach((it) => {
+    if (!it || !it.id) return;
+    const cur = items[it.id];
+    if (!cur || (it.updated || 0) > (cur.updated || 0)) items[it.id] = it;
+  });
+  return { v: 1, items };
+}
+
+const Notes = {
+  data: emptyNotes(),
+  listeners: [],
+  load() { const d = lstore.get(NOTES_KEY); this.data = d && d.items ? d : emptyNotes(); },
+  on(fn) { this.listeners.push(fn); },
+  emit(kind) { this.listeners.forEach((fn) => fn(kind)); },
+  persist() { lstore.set(NOTES_KEY, this.data); },
+  put(item) {
+    item.updated = Date.now();
+    this.data.items[item.id] = item;
+    this.persist(); this.emit("local"); Sync.schedule();
+  },
+  remove(id) {
+    const it = this.data.items[id];
+    if (!it) return;
+    this.data.items[id] = { id, type: it.type, chapter: it.chapter, deleted: true, updated: Date.now() };
+    this.persist(); this.emit("local"); Sync.schedule();
+  },
+  get(id) { const it = this.data.items[id]; return it && !it.deleted ? it : null; },
+  highlights(slug) {
+    return Object.values(this.data.items)
+      .filter((x) => x.type === "hl" && !x.deleted && (!slug || x.chapter === slug))
+      .sort((a, b) => (a.created || 0) - (b.created || 0));
+  },
+  notebook(slug) { const it = this.get(`nb:${slug}`); return it ? it.text || "" : ""; },
+  setNotebook(slug, text) {
+    if (text === this.notebook(slug)) return;
+    this.put({ id: `nb:${slug}`, type: "nb", chapter: slug, text });
+  },
+  // 同步或匯入後換成合併好的資料
+  replaceWith(merged) { this.data = merged; this.persist(); this.emit("remote"); }
+};
+
+const Sync = {
+  cfg: {},
+  state: "off",          // off 沒設定、idle 已同步、syncing 同步中、error 失敗、offline 離線
+  msg: "",
+  timer: null, busy: false, again: false,
+  init() { this.cfg = lstore.get(SYNC_KEY) || {}; this.state = this.cfg.token ? "idle" : "off"; },
+  save() { lstore.set(SYNC_KEY, this.cfg); },
+  set(state, msg) { this.state = state; this.msg = msg; Notes.emit("sync"); },
+  async api(path, opts = {}) {
+    const headers = { Accept: "application/vnd.github+json", Authorization: `Bearer ${this.cfg.token}`, "X-GitHub-Api-Version": "2022-11-28" };
+    if (opts.body) headers["Content-Type"] = "application/json";
+    const res = await fetch(`https://api.github.com${path}`, Object.assign({}, opts, { headers, cache: "no-store" }));
+    if (!res.ok) { const err = new Error(`GitHub API ${res.status}`); err.status = res.status; throw err; }
+    return res.status === 204 ? null : res.json();
+  },
+  // 第一次連線：先找帳號裡已經有的筆記 gist（換電腦時就會找到同一個），沒有才建立新的 secret gist
+  async findOrCreate() {
+    for (let page = 1; page <= 5; page++) {
+      const list = await this.api(`/gists?per_page=100&page=${page}`);
+      const g = list.find((x) => x.files && x.files[GIST_FILE]);
+      if (g) return g;
+      if (list.length < 100) break;
+    }
+    return this.api("/gists", { method: "POST", body: JSON.stringify({ description: GIST_DESC, public: false, files: { [GIST_FILE]: { content: JSON.stringify(Notes.data) } } }) });
+  },
+  async readRemote() {
+    const g = await this.api(`/gists/${this.cfg.gistId}`);
+    const f = g.files && g.files[GIST_FILE];
+    if (!f) return emptyNotes();
+    let text = f.content;
+    if (f.truncated) text = await (await fetch(f.raw_url, { cache: "no-store" })).text();
+    try { const d = JSON.parse(text); return d && d.items ? d : emptyNotes(); } catch (err) { return emptyNotes(); }
+  },
+  async useGist() {
+    const g = await this.findOrCreate();
+    this.cfg.gistId = g.id;
+    this.cfg.gistUrl = g.html_url;
+    this.save();
+  },
+  async run() {
+    if (!this.cfg.token) return;
+    if (this.busy) { this.again = true; return; }
+    if (navigator.onLine === false) { this.set("offline", "離線中，筆記先存在這台電腦，連上網路後會自動同步"); return; }
+    this.busy = true;
+    this.set("syncing", "同步中...");
+    try {
+      if (!this.cfg.gistId) await this.useGist();
+      let remote;
+      try { remote = await this.readRemote(); } catch (err) {
+        if (err.status !== 404) throw err;
+        await this.useGist();                      // gist 被刪掉了：重新找或建立
+        remote = await this.readRemote();
+      }
+      const merged = mergeNotes(Notes.data, remote);
+      if (notesSig(merged) !== notesSig(Notes.data)) Notes.replaceWith(merged);
+      if (notesSig(merged) !== notesSig(remote)) {
+        await this.api(`/gists/${this.cfg.gistId}`, { method: "PATCH", body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(merged) } } }) });
+      }
+      this.cfg.lastSync = Date.now();
+      this.save();
+      this.set("idle", `已同步 · ${fmtTime(this.cfg.lastSync)}`);
+    } catch (err) {
+      if (err.status === 401) this.set("error", "token 無效或已過期，請到同步設定重新貼上");
+      else if (err.status === 403 || err.status === 404) this.set("error", "token 沒有 gist 權限，或 GitHub API 次數暫時用完了");
+      else this.set("error", "同步失敗，筆記已經存在這台電腦，稍後會再試");
+    } finally {
+      this.busy = false;
+      if (this.again) { this.again = false; this.schedule(800); }
+    }
+  },
+  schedule(ms = 2500) {
+    if (!this.cfg.token) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.run(), ms);
+  },
+  async connect(token) {
+    this.cfg = { token: token.trim() };
+    this.save();
+    await this.run();
+    return this.state === "idle";
+  },
+  disconnect() { clearTimeout(this.timer); this.cfg = {}; this.save(); this.set("off", ""); }
+};
+
+/* 在筆記裡找字：給名詞查詢、本章搜尋、筆記總覽用。slug 沒給就找全部章節 */
+function searchNotes(q, slug) {
+  const n = q.trim().toLowerCase();
+  if (!n) return [];
+  const hits = Notes.highlights(slug).filter((h) => (h.note || "").toLowerCase().includes(n) || (h.quote || "").toLowerCase().includes(n));
+  Object.values(Notes.data.items).forEach((x) => {
+    if (x.type === "nb" && !x.deleted && (!slug || x.chapter === slug) && (x.text || "").toLowerCase().includes(n)) hits.push(x);
+  });
+  return hits;
+}
+/* 從一段長文字裡切出關鍵字附近的一小段 */
+function noteSnippet(text, q, len = 70) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  const k = q ? t.toLowerCase().indexOf(q.trim().toLowerCase()) : -1;
+  if (t.length <= len) return t;
+  const start = k > 20 ? k - 20 : 0;
+  return (start ? "..." : "") + t.slice(start, start + len) + (start + len < t.length ? "..." : "");
+}
+
+/* ---------- 筆記：在章節內文畫線 ----------
+   畫線的位置用「原文 + 前後各 32 個字」記錄，不記 DOM 路徑，
+   這樣就算 site.js 之後改了區塊的包法，或章節內容小幅修改，也還找得回來 */
+const NOTE_SKIP = ".chapter-head, .pager, [aria-hidden='true'], .sec-label";
+function noteTextIndex() {
+  const main = document.querySelector("main.content");
+  const entries = [];
+  let text = "";
+  const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && !n.parentElement.closest(NOTE_SKIP) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT)
+  });
+  let n;
+  while ((n = walker.nextNode())) { entries.push({ node: n, start: text.length }); text += n.nodeValue; }
+  return { entries, text };
+}
+function notePoint(idx, container, offset) {
+  if (container.nodeType === 3) {
+    const e = idx.entries.find((x) => x.node === container);
+    if (e) return e.start + offset;
+  }
+  const r = document.createRange();
+  r.setStart(container, offset);
+  for (const e of idx.entries) if (r.comparePoint(e.node, 0) >= 0) return e.start;
+  return idx.text.length;
+}
+function anchorFromRange(range) {
+  const idx = noteTextIndex();
+  let s = notePoint(idx, range.startContainer, range.startOffset);
+  let e = notePoint(idx, range.endContainer, range.endOffset);
+  while (s < e && /\s/.test(idx.text[s])) s++;
+  while (e > s && /\s/.test(idx.text[e - 1])) e--;
+  if (e - s < 1) return null;
+  const at = idx.entries.filter((x) => x.start <= s).pop();
+  const sec = at && at.node.parentElement.closest(".sec-block");
+  return {
+    quote: idx.text.slice(s, e),
+    prefix: idx.text.slice(Math.max(0, s - 32), s),
+    suffix: idx.text.slice(e, e + 32),
+    section: sec ? sec.dataset.sec : ""
+  };
+}
+/* 同一段文字出現好幾次時，挑前後文最吻合的那一處 */
+function locateAnchor(idx, a) {
+  let best = -1, bestScore = -1;
+  let k = idx.text.indexOf(a.quote);
+  while (k !== -1) {
+    const pre = idx.text.slice(Math.max(0, k - (a.prefix || "").length), k);
+    const suf = idx.text.slice(k + a.quote.length, k + a.quote.length + (a.suffix || "").length);
+    let score = 0;
+    while (score < pre.length && pre[pre.length - 1 - score] === a.prefix[a.prefix.length - 1 - score]) score++;
+    let s2 = 0;
+    while (s2 < suf.length && suf[s2] === a.suffix[s2]) s2++;
+    if (score + s2 > bestScore) { bestScore = score + s2; best = k; }
+    k = idx.text.indexOf(a.quote, k + 1);
+  }
+  return best;
+}
+function wrapNoteRange(idx, s, e, item) {
+  const parts = idx.entries.filter((x) => x.start < e && x.start + x.node.nodeValue.length > s);
+  const marks = [];
+  parts.forEach((x) => {
+    let node = x.node;
+    const a = Math.max(0, s - x.start);
+    const b = Math.min(node.nodeValue.length, e - x.start);
+    if (a > 0) node = node.splitText(a);
+    if (b - a < node.nodeValue.length) node.splitText(b - a);
+    if (!/\S/.test(node.nodeValue)) return;            // 純空白（例如兩個 li 之間）不用包
+    const mark = document.createElement("mark");
+    mark.className = "note-hl";
+    mark.dataset.note = item.id;
+    node.parentNode.insertBefore(mark, node);
+    mark.appendChild(node);
+    marks.push(mark);
+  });
+  if (marks.length) {
+    marks[0].classList.add("nh-first");
+    marks[marks.length - 1].classList.add("nh-last");
+    if (item.note && item.note.trim()) marks.forEach((m) => m.classList.add("has-note"));
+  }
+  return marks.length > 0;
+}
+const noteMarksOf = (id) => Array.from(document.querySelectorAll("mark.note-hl")).filter((m) => m.dataset.note === id);
+let noteOrphans = new Set();
+let noteMarkSig = null;
+/* 把這一章的畫線重新畫一次（筆記有變動時呼叫）；找不到原文的記在 noteOrphans */
+function renderNoteMarks(force = false) {
+  const slug = document.body.dataset.chapter;
+  const list = Notes.highlights(slug);
+  const sig = list.map((h) => `${h.id}${h.note && h.note.trim() ? "*" : ""}`).join("|");
+  if (!force && sig === noteMarkSig) return;
+  noteMarkSig = sig;
+  document.querySelectorAll("mark.note-hl").forEach((m) => {
+    const parent = m.parentNode;
+    m.replaceWith(...m.childNodes);
+    parent.normalize();
+  });
+  noteOrphans = new Set();
+  list.forEach((h) => {
+    const idx = noteTextIndex();
+    const k = locateAnchor(idx, h);
+    if (k < 0 || !wrapNoteRange(idx, k, k + h.quote.length, h)) noteOrphans.add(h.id);
+  });
+}
+
+/* 點畫線時跳出的註解卡 */
+let notePop = null;
+function closeNotePop() { if (notePop) notePop.hidden = true; }
+function openNotePop(id, editing = false) {
+  const item = Notes.get(id);
+  const marks = noteMarksOf(id);
+  if (!item || !marks.length) return;
+  if (!notePop) {
+    notePop = document.createElement("div");
+    notePop.className = "note-pop";
+    notePop.setAttribute("role", "dialog");
+    notePop.setAttribute("aria-label", "畫線筆記");
+    document.body.appendChild(notePop);
+    document.addEventListener("mousedown", (e) => {
+      if (!notePop.hidden && !notePop.contains(e.target) && !e.target.closest("mark.note-hl")) closeNotePop();
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !notePop.hidden && !notePop.querySelector("textarea")) closeNotePop(); });
+    window.addEventListener("resize", closeNotePop);
+  }
+  const place = () => {
+    const r = marks[0].getBoundingClientRect();
+    const w = Math.min(360, window.innerWidth - 24);
+    notePop.style.width = `${w}px`;
+    notePop.style.left = `${Math.max(12, Math.min(r.left + window.scrollX, window.scrollX + window.innerWidth - w - 12))}px`;
+    notePop.style.top = `${r.bottom + window.scrollY + 10}px`;
+  };
+  const draw = (edit) => {
+    const cur = Notes.get(id);
+    if (!cur) { closeNotePop(); return; }
+    notePop.innerHTML = `
+      <div class="np-head"><span class="np-label">NOTE</span><span class="np-time">${escapeHtml(fmtTime(cur.updated))}</span><button type="button" class="np-x" data-act="close" aria-label="關閉">×</button></div>
+      <blockquote class="np-quote"></blockquote>
+      ${edit ? `<textarea class="np-input" rows="4" placeholder="寫下你對這段的註解（可以留空，只畫線）"></textarea>
+        <div class="np-actions"><button type="button" class="np-main" data-act="save">儲存</button><button type="button" data-act="cancel">取消</button><span class="np-tip">Ctrl / ⌘ + Enter 儲存</span></div>`
+      : `<p class="np-text"></p>
+        <div class="np-actions"><button type="button" class="np-main" data-act="edit">${cur.note && cur.note.trim() ? "編輯註解" : "寫註解"}</button><button type="button" data-act="del">刪除畫線</button></div>`}`;
+    notePop.querySelector(".np-quote").textContent = noteSnippet(cur.quote, "", 120);
+    const on = (act, fn) => { const b = notePop.querySelector(`[data-act="${act}"]`); if (b) b.addEventListener("click", fn); };
+    on("close", closeNotePop);
+    if (edit) {
+      const ta = notePop.querySelector(".np-input");
+      ta.value = cur.note || "";
+      const save = () => { Notes.put(Object.assign({}, cur, { note: ta.value })); draw(false); };
+      on("save", save);
+      on("cancel", () => draw(false));
+      ta.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+        else if (e.key === "Escape") { e.preventDefault(); draw(false); }
+      });
+      setTimeout(() => ta.focus({ preventScroll: true }), 30);
+    } else {
+      const p = notePop.querySelector(".np-text");
+      if (cur.note && cur.note.trim()) p.textContent = cur.note;
+      else { p.textContent = "還沒寫註解，目前只有畫線。"; p.classList.add("empty"); }
+      on("edit", () => draw(true));
+      const del = notePop.querySelector('[data-act="del"]');
+      del.addEventListener("click", () => {
+        // 按兩次才刪，避免手滑
+        if (del.dataset.sure) { Notes.remove(id); closeNotePop(); return; }
+        del.dataset.sure = "1";
+        del.textContent = "再按一次確定刪除";
+        del.classList.add("danger");
+      });
+    }
+  };
+  draw(editing);
+  notePop.hidden = false;
+  place();
+}
+/* 跳到某一則畫線並閃動（從筆記總覽、筆記清單、名詞查詢點過來） */
+function focusNote(id, open = true) {
+  const marks = noteMarksOf(id);
+  if (!marks.length) return false;
+  marks[0].scrollIntoView({ behavior: "smooth", block: "center" });
+  marks.forEach((m) => { m.classList.remove("flash"); void m.offsetWidth; m.classList.add("flash"); });
+  setTimeout(() => marks.forEach((m) => m.classList.remove("flash")), 3800);
+  if (open) setTimeout(() => openNotePop(id), 550);
+  return true;
+}
+/* 從反白的範圍建立一則畫線筆記（反白後按「畫線加筆記」） */
+function startNoteFromRange(range) {
+  const slug = document.body.dataset.chapter;
+  if (!slug || !range) return;
+  const a = anchorFromRange(range);
+  if (!a) return;
+  const item = Object.assign({ id: newNoteId(), type: "hl", chapter: slug, created: Date.now(), note: "" }, a);
+  const sel = window.getSelection();
+  if (sel) sel.removeAllRanges();
+  Notes.put(item);
+  openNotePop(item.id, true);
+}
+/* 本章搜尋：註解內容符合的畫線，也算進 ↑ ↓ 會停的位置 */
+function addNoteMatches(q) {
+  const slug = document.body.dataset.chapter;
+  const n = q.trim().toLowerCase();
+  findState.noteCount = 0;
+  if (!slug || n.length < 2) return 0;
+  const extra = Notes.highlights(slug)
+    .filter((h) => (h.note || "").toLowerCase().includes(n))
+    .map((h) => noteMarksOf(h.id)[0]).filter(Boolean);
+  if (!extra.length) return 0;
+  extra.forEach((m) => m.classList.add("note-match"));
+  const curEl = findState.marks[findState.i];
+  const all = Array.from(new Set([...findState.marks, ...extra]))
+    .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  findState.marks = all;
+  findState.noteCount = extra.length;
+  if (!findState.term) Object.assign(findState, { term: q.trim(), mode: "all", total: all.length });
+  if (curEl) findState.i = all.indexOf(curEl);
+  else { findState.i = 0; focusMark(); }
+  return extra.length;
+}
+
+/* ---------- 筆記：右側抽屜（整章筆記本、本章畫線清單、同步設定） ---------- */
+function setupNotesDrawer(root, current) {
+  const drawer = document.createElement("aside");
+  drawer.className = "notes-drawer";
+  drawer.id = "notes-drawer";
+  drawer.hidden = true;
+  drawer.setAttribute("aria-label", "我的筆記");
+  drawer.innerHTML = `
+    <div class="nd-head"><span class="nd-title"></span><button type="button" class="nd-x" aria-label="關閉">×</button></div>
+    <div class="nd-body"></div>
+    <div class="nd-foot"><span class="sync-state"><i class="sync-dot"></i><span class="sync-msg"></span></span><button type="button" class="nd-link" data-act="settings">同步設定</button></div>`;
+  document.body.appendChild(drawer);
+  const body = drawer.querySelector(".nd-body");
+  const title = drawer.querySelector(".nd-title");
+  const chapter = current ? chapterBySlug(current) : null;
+  let view = "chapter";
+  let nbTimer = null;
+
+  const syncText = () => {
+    if (Sync.state === "off") return "筆記只存在這台電腦";
+    return Sync.msg || (Sync.cfg.lastSync ? `已同步 · ${fmtTime(Sync.cfg.lastSync)}` : "已設定同步");
+  };
+  const updateSync = () => {
+    drawer.querySelector(".sync-dot").dataset.state = Sync.state;
+    drawer.querySelector(".sync-msg").textContent = syncText();
+    document.querySelectorAll(".notes-btn .sync-dot").forEach((d) => { d.dataset.state = Sync.state; });
+    if (view === "settings" && !drawer.hidden && !body.contains(document.activeElement)) draw();
+  };
+
+  const drawChapter = () => {
+    title.textContent = chapter ? `CH.${chapter.no} ${chapter.title} · 我的筆記` : "我的筆記";
+    const list = Notes.highlights(current);
+    body.innerHTML = `
+      <section class="nd-sec">
+        <h4>整章筆記本</h4>
+        <textarea class="nd-notebook" placeholder="這一章想記的東西都可以寫在這裡：老師補充的重點、自己的整理、考前要再看的地方..."></textarea>
+        <p class="nd-saved"></p>
+      </section>
+      <section class="nd-sec">
+        <h4>畫線註解 <small>${list.length}</small></h4>
+        ${list.length ? `<ul class="nd-list"></ul>` : `<p class="nd-hint">在內文反白一段文字，按旁邊跳出的「畫線加筆記」，就會出現在這裡。</p>`}
+      </section>
+      <a class="nd-all" href="${root}/notes.html">所有章節的筆記總覽 →</a>`;
+    const ta = body.querySelector(".nd-notebook");
+    const saved = body.querySelector(".nd-saved");
+    ta.value = Notes.notebook(current);
+    ta.addEventListener("input", () => {
+      saved.textContent = "輸入中...";
+      clearTimeout(nbTimer);
+      nbTimer = setTimeout(() => { Notes.setNotebook(current, ta.value); saved.textContent = "已儲存"; }, 600);
+    });
+    ta.addEventListener("blur", () => { clearTimeout(nbTimer); Notes.setNotebook(current, ta.value); });
+    const ul = body.querySelector(".nd-list");
+    if (ul) list.forEach((h) => {
+      const li = document.createElement("li");
+      const orphan = noteOrphans.has(h.id);
+      li.innerHTML = `<button type="button" class="nd-item${orphan ? " orphan" : ""}"><span class="nd-q"></span><span class="nd-n"></span>${orphan ? `<span class="nd-warn">原文已經改過，找不到畫線的位置</span>` : ""}</button>${orphan ? `<button type="button" class="nd-del">刪除</button>` : ""}`;
+      li.querySelector(".nd-q").textContent = noteSnippet(h.quote, "", 90);
+      li.querySelector(".nd-n").textContent = h.note && h.note.trim() ? noteSnippet(h.note, "", 90) : "（只有畫線）";
+      li.querySelector(".nd-item").addEventListener("click", () => {
+        if (orphan) return;
+        if (window.matchMedia("(max-width: 800px)").matches) close();
+        focusNote(h.id);
+      });
+      const del = li.querySelector(".nd-del");
+      if (del) del.addEventListener("click", () => Notes.remove(h.id));
+      ul.appendChild(li);
+    });
+  };
+
+  const drawSettings = () => {
+    title.textContent = "跨電腦同步";
+    const on = !!Sync.cfg.token;
+    body.innerHTML = `
+      ${current ? `<button type="button" class="nd-back">← 回到本章筆記</button>` : ""}
+      <section class="nd-sec">
+        <h4>GitHub Gist 同步</h4>
+        <p class="nd-p">筆記平常存在這台電腦的瀏覽器裡。連上 GitHub 之後，會自動在你的帳號下存一份 <strong>secret gist</strong>；換一台電腦時，貼上 token 就會找到同一份筆記並合併。</p>
+        ${on ? `
+          <p class="nd-status"><i class="sync-dot" data-state="${Sync.state}"></i>${escapeHtml(syncText())}</p>
+          <div class="nd-actions">
+            <button type="button" class="nd-btn main" data-act="sync-now">立即同步</button>
+            ${Sync.cfg.gistUrl ? `<a class="nd-btn" href="${escapeHtml(Sync.cfg.gistUrl)}" target="_blank" rel="noopener">在 GitHub 上查看</a>` : ""}
+            <button type="button" class="nd-btn" data-act="disconnect">中斷連線</button>
+          </div>
+          <p class="nd-small">中斷連線只會刪掉這台電腦上的 token，筆記和 gist 都會保留。</p>`
+        : `
+          <ol class="nd-steps">
+            <li>到 GitHub 建立一個 token，權限只要勾 <code>gist</code>：<a href="${TOKEN_URL}" target="_blank" rel="noopener">建立 token</a></li>
+            <li>把 token 貼在下面，按「連線」。每台電腦都要貼一次。</li>
+          </ol>
+          <div class="nd-token-row"><input type="password" class="nd-token" placeholder="ghp_..." autocomplete="off" spellcheck="false"><button type="button" class="nd-btn main" data-act="connect">連線</button></div>
+          <p class="nd-small nd-err"></p>`}
+        <p class="nd-small">token 只存在這台電腦的瀏覽器裡，不要在公用電腦上設定。secret gist 不會出現在你的公開頁面，但知道網址的人就看得到，也沒有加密，不要放密碼之類的機密。</p>
+      </section>
+      <section class="nd-sec">
+        <h4>備份</h4>
+        <div class="nd-actions">
+          <button type="button" class="nd-btn" data-act="export">匯出備份（.json）</button>
+          <label class="nd-btn">匯入備份<input type="file" accept=".json,application/json" hidden></label>
+        </div>
+        <p class="nd-small">匯入會和現有的筆記合併，同一則筆記保留比較新的版本。</p>
+      </section>`;
+    const act = (name, fn) => { const b = body.querySelector(`[data-act="${name}"]`); if (b) b.addEventListener("click", fn); };
+    const back = body.querySelector(".nd-back");
+    if (back) back.addEventListener("click", () => { view = "chapter"; draw(); });
+    act("sync-now", () => Sync.run());
+    act("disconnect", () => { Sync.disconnect(); draw(); });
+    act("connect", async () => {
+      const input = body.querySelector(".nd-token");
+      const err = body.querySelector(".nd-err");
+      if (!input.value.trim()) { err.textContent = "請先貼上 token。"; return; }
+      err.textContent = "連線中...";
+      const ok = await Sync.connect(input.value);
+      if (!ok) { const msg = Sync.msg; Sync.disconnect(); draw(); body.querySelector(".nd-err").textContent = `連線失敗：${msg}`; }
+      else draw();
+    });
+    act("export", () => {
+      const blob = new Blob([JSON.stringify(Notes.data, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `os-notes-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+    const file = body.querySelector('input[type="file"]');
+    file.addEventListener("change", () => {
+      const f = file.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const d = JSON.parse(reader.result);
+          if (!d || !d.items) throw new Error("format");
+          Notes.replaceWith(mergeNotes(Notes.data, d));
+          Sync.schedule(300);
+          alert("匯入完成，已經和現有的筆記合併。");
+        } catch (err) { alert("這個檔案不是筆記備份，沒有匯入。"); }
+      };
+      reader.readAsText(f);
+    });
+  };
+
+  const draw = () => { if (view === "settings" || !current) drawSettings(); else drawChapter(); updateSyncDot(); };
+  const updateSyncDot = () => {
+    drawer.querySelector(".sync-dot").dataset.state = Sync.state;
+    drawer.querySelector(".sync-msg").textContent = syncText();
+  };
+  const open = (v) => {
+    view = v || (current ? "chapter" : "settings");
+    draw();
+    const head = document.querySelector(".site-header");
+    if (head) drawer.style.top = `${Math.round(head.getBoundingClientRect().bottom)}px`;   // 接在標題列正下方
+    drawer.hidden = false;
+    document.querySelectorAll(".notes-btn").forEach((b) => b.setAttribute("aria-pressed", "true"));
+  };
+  const close = () => {
+    const ta = body.querySelector(".nd-notebook");
+    if (ta && current) { clearTimeout(nbTimer); Notes.setNotebook(current, ta.value); }
+    drawer.hidden = true;
+    document.querySelectorAll(".notes-btn").forEach((b) => b.setAttribute("aria-pressed", "false"));
+  };
+  drawer.querySelector(".nd-x").addEventListener("click", close);
+  drawer.querySelector('[data-act="settings"]').addEventListener("click", () => open("settings"));
+  drawer.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } });
+
+  Notes.on((kind) => {
+    if (kind === "sync") { updateSync(); return; }
+    if (drawer.hidden) return;
+    // 正在打字時不要重畫，游標才不會跳掉；其他時候跟著資料更新
+    if (body.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName)) return;
+    draw();
+  });
+  updateSync();
+  return { open, close, toggle: (v) => (drawer.hidden ? open(v) : close()), isOpen: () => !drawer.hidden };
+}
+
+/* ---------- 筆記總覽頁（notes.html） ---------- */
+function renderNotesOverview(el, root) {
+  el.innerHTML = `
+    <header class="notes-hero">
+      <p class="kicker">// MY NOTES</p>
+      <h1>我的筆記</h1>
+      <p class="lead">所有章節的畫線註解和整章筆記本都在這裡，點一則就會回到原文的位置。</p>
+      <input class="search" id="notes-search" type="search" placeholder="搜尋筆記內容，例如 semaphore、考試、老師說...">
+    </header>
+    <div id="notes-groups"></div>`;
+  const groups = el.querySelector("#notes-groups");
+  const search = el.querySelector("#notes-search");
+  const draw = () => {
+    const q = search.value.trim();
+    const n = q.toLowerCase();
+    const match = (t) => !n || String(t || "").toLowerCase().includes(n);
+    let total = 0;
+    const html = CHAPTERS.map((c) => {
+      const nb = Notes.notebook(c.slug);
+      const hls = Notes.highlights(c.slug).filter((h) => match(h.quote) || match(h.note));
+      const showNb = nb.trim() && match(nb);
+      if (!showNb && !hls.length) return "";
+      total += hls.length + (showNb ? 1 : 0);
+      const href = `${root}/chapters/${c.slug}.html`;
+      return `<section class="notes-group" style="--pc: ${planetColor(c)}">
+        <h2><a href="${href}"><span class="ng-no">CH.${c.no}</span>${escapeHtml(c.title)}<small>${escapeHtml(c.en)}</small></a><span class="ng-count">${hls.length + (showNb ? 1 : 0)} 則</span></h2>
+        ${showNb ? `<a class="ng-notebook" href="${href}?notebook=1"><span class="ng-label">整章筆記本</span><span class="ng-text">${escapeHtml(nb)}</span></a>` : ""}
+        ${hls.length ? `<ul class="ng-list">${hls.map((h) => `
+          <li><a href="${href}?note=${encodeURIComponent(h.id)}">
+            <blockquote>${escapeHtml(noteSnippet(h.quote, q, 140))}</blockquote>
+            ${h.note && h.note.trim() ? `<p class="ng-text">${escapeHtml(h.note)}</p>` : `<p class="ng-text empty">（只有畫線）</p>`}
+            <span class="ng-meta">${escapeHtml(fmtTime(h.updated))} · 回到原文 →</span>
+          </a></li>`).join("")}</ul>` : ""}
+      </section>`;
+    }).join("");
+    groups.innerHTML = html || `<p class="notes-empty">${q ? `筆記裡找不到「${escapeHtml(q)}」。` : "還沒有任何筆記。到任一章反白一段文字，按「畫線加筆記」，或打開標題列的「筆記」寫整章筆記本，就會出現在這裡。"}</p>`;
+  };
+  search.addEventListener("input", draw);
+  Notes.on((kind) => { if (kind !== "sync") draw(); });
+  draw();
+}
+
+/* ---------- 筆記：初始化（每一頁都會呼叫） ---------- */
+function setupNotes(root, current, page) {
+  Notes.load();
+  Sync.init();
+  // 別的分頁改了筆記：重新讀一次
+  window.addEventListener("storage", (e) => {
+    if (e.key === NOTES_KEY) { Notes.load(); Notes.emit("remote"); }
+    if (e.key === SYNC_KEY) { Sync.init(); Notes.emit("sync"); }
+  });
+  // 先畫線、再建抽屜：抽屜的清單要用到「哪些畫線找不到原文」
+  if (current) {
+    renderNoteMarks(true);
+    Notes.on((kind) => { if (kind !== "sync") renderNoteMarks(); });
+  }
+  const drawer = setupNotesDrawer(root, current);
+  document.querySelectorAll(".notes-btn").forEach((b) => b.addEventListener("click", () => drawer.toggle(b.dataset.view)));
+
+  if (current) {
+    const main = document.querySelector("main.content");
+    main.addEventListener("click", (e) => {
+      const m = e.target.closest("mark.note-hl");
+      const sel = window.getSelection();
+      if (m && !(sel && sel.toString().trim())) openNotePop(m.dataset.note);
+    });
+    document.addEventListener("keydown", (e) => {
+      const typing = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
+      if (e.key === "N" && e.shiftKey && !typing && !e.metaKey && !e.ctrlKey) { e.preventDefault(); drawer.toggle(); }
+    });
+    // 從筆記總覽或名詞查詢點過來：?note=id 跳到那則畫線，?notebook=1 打開筆記本
+    const params = new URLSearchParams(location.search);
+    const noteId = params.get("note");
+    if (noteId || params.get("notebook")) {
+      window.addEventListener("load", () => {
+        const run = () => { if (!noteId || !focusNote(noteId)) drawer.open("chapter"); };
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(run); else run();
+      });
+    }
+  }
+  if (page === "notes") {
+    const el = document.getElementById("notes-page");
+    if (el) renderNotesOverview(el, root);
+  }
+
+  // 同步時機：打開頁面、切回這個分頁、重新連上網路；改了筆記則在停手 2.5 秒後（沒設定 token 時 run() 什麼都不做）
+  setTimeout(() => Sync.run(), 600);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && Date.now() - (Sync.cfg.lastSync || 0) > 20000) Sync.run();
+  });
+  window.addEventListener("online", () => Sync.run());
+  return drawer;
 }
 
 /* ---------- 在章節裡找關鍵字 ----------
@@ -726,7 +1443,7 @@ function textNodesWith(needle, onlyKey) {
   let node;
   while ((node = walker.nextNode())) {
     const el = node.parentElement;
-    if (el.closest(".chapter-head, .pager, mark")) continue;
+    if (el.closest(".chapter-head, .pager, mark.hl")) continue;   // 筆記畫線（mark.note-hl）裡的字照樣要找得到
     if (onlyKey && !isKeyPlace(el, needle)) continue;
     if (node.textContent.toLowerCase().includes(needle)) nodes.push(node);
   }
@@ -794,6 +1511,9 @@ function focusMark(step = 0) {
   const cur = marks[findState.i];
   cur.classList.add("cur");
   setTimeout(() => cur.scrollIntoView({ behavior: "smooth", block: "center" }), step ? 0 : 250);
+  // 停在「註解內容符合」的畫線上時，順便打開那則筆記
+  if (cur.classList.contains("note-match")) setTimeout(() => openNotePop(cur.dataset.note), step ? 500 : 750);
+  else closeNotePop();
   const count = document.querySelector("#find-bar .rb-count");
   if (count) count.textContent = `${findState.mode === "key" ? "重點 " : ""}${findState.i + 1} / ${marks.length}`;
 }
@@ -1104,7 +1824,9 @@ function warpTo(href, color, x, y) {
     if (lit) setActive(lit.dataset.sec);
   }
 
-  /* ---------- 章節頁：標題列的「名詞查詢」和「HOME」按鈕 ---------- */
+  /* ---------- 標題列按鈕：名詞查詢、本章搜尋、筆記、HOME ---------- */
+  const NOTES_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h10.5l3.5 3.5v13.5H5z"/><path d="M8.5 9h7M8.5 12.5h7M8.5 16h4"/></svg>`;
+  const NOTES_BTN = `<button class="lookup-btn notes-btn" type="button" title="我的筆記：整章筆記本、畫線清單、同步（快捷鍵 Shift+N）">${NOTES_ICON}<span>筆記</span><i class="sync-dot"></i></button>`;
   const header = document.querySelector(".site-header");
   if (header && current) {
     const menuBtn = document.getElementById("menu-btn");
@@ -1118,6 +1840,7 @@ function warpTo(href, color, x, y) {
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v6"/><path d="M6 3v18h7"/><path d="M14 3v4h4"/><circle cx="17" cy="17" r="3"/><path d="M19.2 19.2L21.5 21.5"/></svg>
           <span>本章搜尋</span>
         </button>
+        ${NOTES_BTN}
         <a class="home-btn" href="${root}/index.html" title="回到首頁">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-5h4v5"/></svg>
           <span>HOME</span>
@@ -1125,6 +1848,17 @@ function warpTo(href, color, x, y) {
       </div>`);
     if (menuBtn) header.querySelector(".header-actions").appendChild(menuBtn);
     setupLookup(root, current);
+  } else if (header) {
+    // 首頁、筆記總覽：標題列右邊放「我的筆記」或「同步設定」和「HOME」
+    const onNotes = body.dataset.page === "notes";
+    header.insertAdjacentHTML("beforeend", `
+      <div class="header-actions">
+        ${onNotes
+          ? `<button class="lookup-btn notes-btn" type="button" data-view="settings" title="跨電腦同步、匯出與匯入">${NOTES_ICON}<span>同步設定</span><i class="sync-dot"></i></button>
+             <a class="home-btn" href="${root}/index.html" title="回到首頁"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-5h4v5"/></svg><span>HOME</span></a>`
+          : `<a class="lookup-btn" href="${root}/notes.html" title="所有章節的筆記總覽">${NOTES_ICON}<span>我的筆記</span></a>`}
+      </div>`);
   }
+  setupNotes(root, current, body.dataset.page);
 
 })();

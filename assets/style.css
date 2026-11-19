@@ -453,12 +453,17 @@ details.quiz p { margin: 0.4rem 0; }
 .term-go { display: inline-block; padding: 0.35rem 0.9rem; font-family: var(--mono); font-weight: 500; font-size: 0.8rem; letter-spacing: 0.08em; color: var(--space); background: var(--pc); text-decoration: none; }
 .term-go:hover { filter: brightness(1.1); }
 
+/* 反白後跳出的小按鈕：查詢（40 字以內才有）+ 畫線加筆記 */
 .sel-bubble {
-  position: fixed; z-index: 40; transform: translate(-50%, -100%); padding: 0.3rem 0.75rem;
-  font-family: var(--sans); font-size: 0.85rem; color: var(--space); background: var(--pc); border: none; cursor: pointer;
+  position: fixed; z-index: 40; transform: translate(-50%, -100%); display: flex;
+  border: 1px solid var(--pc); border-radius: 3px; overflow: hidden; background: var(--space-2);
   animation: pop 0.2s ease-out;
 }
-.sel-bubble[hidden] { display: none; }
+.sel-bubble[hidden], .sel-bubble button[hidden] { display: none; }
+.sel-bubble button { padding: 0.3rem 0.75rem; font-family: var(--sans); font-size: 0.85rem; white-space: nowrap; color: var(--space); background: var(--pc); border: none; cursor: pointer; }
+.sel-bubble button[data-act="note"] { color: var(--pc); background: var(--space-2); }
+.sel-bubble button[data-act="note"]:hover { background: var(--space-3); }
+.sel-bubble button + button { border-left: 1px solid var(--pc); }
 mark.hl { color: var(--text); background: color-mix(in srgb, var(--pc) 28%, transparent); padding: 0 0.15em; border-radius: 2px; }
 mark.hl.cur { color: var(--space); background: var(--pc); }
 mark.hl.flash { animation: hl-blink 0.9s ease-in-out 4; }
@@ -716,3 +721,168 @@ main.content .sec-body > h3:first-child { margin-top: 0.4rem; }
 .find-bar .fb-hint { font-family: var(--mono); font-size: 0.72rem; color: var(--text-soft); white-space: nowrap; }
 #find-open[aria-pressed="true"] { border-color: var(--pc); color: var(--pc); }
 @media (max-width: 700px) { .find-bar #find-input { width: 100%; flex: 1 1 100%; } }
+
+/* ---------- 13. 筆記：畫線、註解卡、筆記抽屜、筆記總覽 ----------
+   資料和同步都在 site.js 的 Notes / Sync；顏色一律跟著該章的行星色 --pc */
+mark.note-hl {
+  color: inherit; padding: 0; border-radius: 2px; cursor: pointer;
+  background: color-mix(in srgb, var(--pc) 16%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--pc) 70%, transparent);
+  transition: background 0.2s;
+}
+mark.note-hl:hover { background: color-mix(in srgb, var(--pc) 28%, transparent); }
+mark.note-hl.has-note { box-shadow: inset 0 -2px 0 var(--pc); }
+mark.note-hl.has-note.nh-last::after { /* 有寫註解的畫線，結尾加一個行星色小點 */
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 3px; border-radius: 50%;
+  vertical-align: super; background: var(--pc); box-shadow: 0 0 6px var(--pc);
+}
+mark.note-hl.cur { color: var(--space); background: var(--pc); }
+mark.note-hl.flash { animation: hl-blink 0.9s ease-in-out 4; }
+@media (prefers-reduced-motion: reduce) { mark.note-hl.flash, mark.hl.flash { animation: none; background: var(--pc); color: var(--space); } }
+
+/* 點畫線時的註解卡 */
+.note-pop {
+  position: absolute; z-index: 35; padding: 0.8rem 0.9rem 0.9rem;
+  background: var(--space-2); border: 1px solid var(--line-strong); border-top: 2px solid var(--pc); border-radius: 12px;
+  box-shadow: 0 0 24px color-mix(in srgb, var(--pc) 22%, transparent);
+  animation: pop 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.note-pop[hidden] { display: none; }
+.note-pop .np-head { display: flex; align-items: center; gap: 0.6rem; }
+.note-pop .np-label { font-family: var(--mono); font-weight: 500; font-size: 0.7rem; letter-spacing: 0.18em; color: var(--pc); }
+.note-pop .np-time { font-family: var(--mono); font-size: 0.7rem; color: var(--text-soft); }
+.note-pop .np-x { margin-left: auto; width: 26px; height: 26px; font-size: 1.1rem; line-height: 1; color: var(--text-soft); background: none; border: none; cursor: pointer; }
+.note-pop .np-x:hover { color: var(--text); }
+.note-pop .np-quote { margin: 0.5rem 0 0.6rem; padding: 0.1rem 0 0.1rem 0.7rem; font-size: 0.85rem; line-height: 1.7; color: var(--text-soft); border-left: 2px solid var(--pc); }
+.note-pop .np-text { margin: 0 0 0.8rem; font-size: 0.95rem; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.note-pop .np-text.empty { color: var(--text-soft); font-size: 0.85rem; }
+.note-pop .np-input, .notes-drawer textarea {
+  display: block; width: 100%; margin: 0 0 0.7rem; padding: 0.6rem 0.7rem; resize: vertical;
+  font-family: var(--sans); font-size: 0.95rem; line-height: 1.7; color: var(--text);
+  background: var(--space); border: 1px solid var(--line-strong); border-radius: 3px; outline: none;
+}
+.note-pop .np-input:focus, .notes-drawer textarea:focus, .notes-drawer input:focus { border-color: var(--pc); }
+.note-pop .np-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.note-pop .np-actions button, .nd-btn {
+  display: inline-flex; align-items: center; padding: 0.25rem 0.75rem;
+  font-family: var(--mono); font-weight: 500; font-size: 0.75rem; letter-spacing: 0.06em; text-decoration: none;
+  color: var(--text); background: none; border: 1px solid var(--line-strong); border-radius: 3px; cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+}
+.note-pop .np-actions button:hover, .nd-btn:hover { border-color: var(--pc); color: var(--pc); }
+.note-pop .np-actions .np-main, .nd-btn.main { color: var(--space); background: var(--pc); border-color: var(--pc); }
+.note-pop .np-actions .np-main:hover, .nd-btn.main:hover { color: var(--space); filter: brightness(1.1); }
+.note-pop .np-actions .danger { color: var(--g2); border-color: var(--g2); }
+.note-pop .np-tip { font-family: var(--mono); font-size: 0.7rem; color: var(--text-soft); }
+
+/* 標題列「筆記」按鈕上的同步燈號 */
+.sync-dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
+.sync-dot[data-state="off"], .notes-btn .sync-dot:not([data-state]) { display: none; }
+.sync-dot[data-state="idle"] { background: var(--pc); box-shadow: 0 0 6px var(--pc); }
+.sync-dot[data-state="syncing"] { background: var(--pc); animation: sync-pulse 1s ease-in-out infinite; }
+.sync-dot[data-state="error"] { background: var(--g2); box-shadow: 0 0 6px var(--g2); }
+.sync-dot[data-state="offline"] { background: var(--text-soft); }
+@keyframes sync-pulse { 50% { opacity: 0.25; } }
+.notes-drawer .sync-dot[data-state="off"] { display: inline-block; background: var(--text-soft); }
+.notes-btn[aria-pressed="true"] { border-color: var(--pc); color: var(--pc); }
+@media (prefers-reduced-motion: reduce) { .sync-dot[data-state="syncing"] { animation: none; } }
+
+/* 右側筆記抽屜 */
+.notes-drawer {
+  position: fixed; top: 59px; right: 0; bottom: 0; z-index: 30; width: min(400px, 100vw);
+  display: flex; flex-direction: column;
+  background: var(--space-2); border-left: 1px solid var(--line-strong);
+  box-shadow: -1px 0 0 var(--pc), 0 0 40px -10px color-mix(in srgb, var(--pc) 35%, transparent);
+  animation: drawer-in 0.28s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+.notes-drawer[hidden] { display: none; }
+@keyframes drawer-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+.nd-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.8rem 0.9rem 0.8rem 1.2rem; border-bottom: 1px solid var(--line); }
+.nd-title { font-family: var(--mono); font-weight: 500; font-size: 0.78rem; letter-spacing: 0.12em; color: var(--pc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nd-x { margin-left: auto; width: 30px; height: 30px; font-size: 1.2rem; color: var(--text-soft); background: none; border: none; cursor: pointer; }
+.nd-x:hover { color: var(--text); }
+.nd-body { flex: 1; overflow-y: auto; padding: 0.4rem 1.2rem 1.2rem; }
+.nd-sec { padding: 0.9rem 0 0.4rem; }
+.nd-sec + .nd-sec { border-top: 1px dashed var(--line); }
+.nd-sec h4 { margin: 0 0 0.6rem; font-family: var(--mono); font-weight: 500; font-size: 0.74rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-soft); }
+.nd-sec h4 small { margin-left: 0.3rem; color: var(--pc); font-size: 0.74rem; }
+.notes-drawer .nd-notebook { min-height: 180px; }
+.nd-saved { min-height: 1.2em; margin: -0.4rem 0 0; font-family: var(--mono); font-size: 0.7rem; color: var(--text-soft); }
+.nd-hint, .nd-p { margin: 0 0 0.6rem; font-size: 0.88rem; line-height: 1.8; color: var(--text-soft); }
+.nd-p strong { color: var(--text); }
+.nd-small { margin: 0.5rem 0; font-size: 0.78rem; line-height: 1.7; color: var(--text-soft); }
+.nd-err:empty { display: none; }
+.nd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.nd-list li { display: flex; gap: 0.4rem; align-items: flex-start; }
+.nd-item {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; padding: 0.55rem 0.7rem; text-align: left; font: inherit; color: var(--text);
+  background: var(--space); border: 1px solid var(--line); border-left: 2px solid var(--pc); border-radius: 3px; cursor: pointer;
+}
+.nd-item:hover { border-color: var(--pc); }
+.nd-item.orphan { cursor: default; border-left-color: var(--g2); }
+.nd-q { font-size: 0.82rem; line-height: 1.6; color: var(--text-soft); }
+.nd-n { font-size: 0.9rem; line-height: 1.6; overflow-wrap: anywhere; }
+.nd-warn { font-family: var(--mono); font-size: 0.68rem; color: var(--g2); }
+.nd-del { flex: none; padding: 0.2rem 0.5rem; font-family: var(--mono); font-size: 0.7rem; color: var(--g2); background: none; border: 1px solid var(--g2); border-radius: 3px; cursor: pointer; }
+.nd-all { display: block; margin: 1rem 0 0; padding: 0.6rem 0.8rem; font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.05em; color: var(--text-soft); text-decoration: none; border: 1px dashed var(--line-strong); }
+.nd-all:hover { color: var(--pc); border-color: var(--pc); }
+.nd-back { margin: 0.6rem 0 0; padding: 0; font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.1em; color: var(--text-soft); background: none; border: none; cursor: pointer; }
+.nd-back:hover { color: var(--text); }
+.nd-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.nd-status { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.7rem; font-family: var(--mono); font-size: 0.78rem; color: var(--text); }
+.nd-steps { margin: 0 0 0.7rem; padding-left: 1.2rem; font-size: 0.88rem; line-height: 1.8; color: var(--text-soft); }
+.nd-steps a, .nd-small a { color: var(--pc); }
+.nd-steps code { font-family: var(--mono); font-size: 0.82em; color: var(--text); }
+.nd-token-row { display: flex; gap: 0.5rem; }
+.nd-token { flex: 1; min-width: 0; padding: 0.35rem 0.6rem; font-family: var(--mono); font-size: 0.82rem; color: var(--text); background: var(--space); border: 1px solid var(--line-strong); border-radius: 3px; outline: none; }
+.nd-foot { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 1.2rem; border-top: 1px solid var(--line); }
+.nd-foot .sync-state { display: flex; align-items: center; gap: 0.5rem; min-width: 0; font-family: var(--mono); font-size: 0.7rem; color: var(--text-soft); }
+.nd-foot .sync-msg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nd-link { margin-left: auto; flex: none; padding: 0.2rem 0.6rem; font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em; color: var(--text); background: none; border: 1px solid var(--line-strong); border-radius: 3px; cursor: pointer; }
+.nd-link:hover { border-color: var(--pc); color: var(--pc); }
+
+/* 名詞查詢裡的「你的筆記」 */
+.lookup-notes { margin: 0.4rem 0 0; padding-top: 0.4rem; border-top: 1px dashed var(--line); }
+.lookup-notes .ln-title { margin: 0.4rem 0.8rem 0.2rem; font-family: var(--mono); font-weight: 500; font-size: 0.7rem; letter-spacing: 0.16em; color: var(--pc); }
+.return-bar .fb-hint + .rb-mode { margin-left: 0.2rem; }
+
+/* 首頁、筆記總覽的標題列：說明文字和按鈕靠右 */
+body:not([data-chapter]) .site-header .tagline { margin-left: auto; }
+body:not([data-chapter]) .site-header .tagline + .header-actions { margin-left: 0.4rem; }
+
+/* 筆記總覽頁 */
+.notes-page { max-width: 920px; margin: 0 auto; padding: 3rem 2rem 4rem; }
+.notes-hero { margin-bottom: 2.4rem; }
+.notes-hero .kicker { margin: 0; font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.2em; color: var(--gold); }
+.notes-hero h1 { margin: 0.3rem 0 0.4rem; font-size: 2.4rem; font-weight: 600; }
+.notes-hero .lead { margin: 0 0 1.2rem; color: var(--text-soft); }
+.notes-group { margin: 0 0 1.6rem; padding: 1.3rem 1.5rem 1.4rem; background: rgba(14, 15, 21, 0.72); border: 1px solid var(--line); border-top: 2px solid var(--pc); border-radius: 20px; }
+.notes-group h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin: 0 0 0.9rem; font-size: 1.25rem; font-weight: 600; }
+.notes-group h2 a { color: var(--text); text-decoration: none; }
+.notes-group h2 a:hover { color: var(--pc); }
+.notes-group .ng-no { margin-right: 0.6rem; font-family: var(--mono); font-weight: 500; font-size: 0.85rem; color: var(--pc); }
+.notes-group h2 small { margin-left: 0.6rem; font-family: var(--mono); font-weight: 400; font-size: 0.75rem; letter-spacing: 0.08em; color: var(--text-soft); }
+.notes-group .ng-count { flex: none; font-family: var(--mono); font-size: 0.74rem; color: var(--text-soft); }
+.ng-notebook, .ng-list a { display: block; padding: 0.8rem 1rem; color: var(--text); text-decoration: none; background: var(--space); border: 1px solid var(--line); border-left: 2px solid var(--pc); border-radius: 12px; transition: border-color 0.2s; }
+.ng-notebook:hover, .ng-list a:hover { border-color: var(--pc); }
+.ng-notebook { margin-bottom: 0.7rem; }
+.ng-label { display: block; margin-bottom: 0.3rem; font-family: var(--mono); font-weight: 500; font-size: 0.7rem; letter-spacing: 0.16em; color: var(--pc); }
+.ng-text { display: block; margin: 0; font-size: 0.95rem; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ng-text.empty { color: var(--text-soft); font-size: 0.85rem; }
+.ng-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.ng-list blockquote { margin: 0 0 0.4rem; padding-left: 0.7rem; font-size: 0.86rem; line-height: 1.7; color: var(--text-soft); border-left: 2px solid var(--line-strong); }
+.ng-meta { display: block; margin-top: 0.4rem; font-family: var(--mono); font-size: 0.7rem; color: var(--text-soft); }
+.notes-empty { padding: 2rem 1.5rem; color: var(--text-soft); line-height: 1.9; border: 1px dashed var(--line-strong); border-radius: 20px; }
+
+@media (max-width: 800px) {
+  .notes-drawer { width: 100vw; border-left: none; }
+  .notes-page { padding: 2rem 1.1rem 3rem; }
+  .notes-hero h1 { font-size: 1.9rem; }
+  .notes-group { padding: 1.1rem 1rem 1.2rem; }
+  .notes-group h2 { flex-direction: column; gap: 0.2rem; }
+  .sel-bubble button { padding: 0.45rem 0.8rem; }
+  /* 標題列按鈕只剩圖示時縮窄一點，360px 的手機也放得下；同步燈號改成貼在按鈕右上角 */
+  .header-actions .lookup-btn, .header-actions .home-btn { padding: 0 0.55rem; }
+  .notes-btn { position: relative; }
+  .notes-btn .sync-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; }
+}
