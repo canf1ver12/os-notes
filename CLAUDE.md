@@ -39,6 +39,7 @@
 - 讀者是正在修 OS 的大學生，包含作者本人（統計系主修、資科輔系）。
 - **內容的依據是上課投影片和作者自己的筆記**（課程用課本 Silberschatz, Galvin, Gagne《Operating System Concepts》）。寫新章節時先讀那一章的投影片和筆記，以筆記的說法、例子和比喻為主，投影片標示「不考」的內容可以略過或註明。
 - **章節編號和課本章節編號一致**：01 Introduction、02 OS Structure、03 Processes、04 Threads、05 CPU Scheduling、06 Synchronization Tools，之後依序是 07 Synchronization Examples、08 Deadlocks、09 Main Memory、10 Virtual Memory……
+- 一份投影片如果橫跨課本兩章（例如 06-07 那兩份同時講 Synchronization Tools 和 Synchronization Examples），**依課本章節拆開**放進對應的頁面，並在延伸閱讀寫清楚每一頁用到投影片的哪幾頁。投影片裡的作業題目（HW）不要寫進網站，也不要把作業的解答寫成自我測驗。
 - 目標：讀完一頁就能**看懂觀念、會手算例題、看得懂 pseudocode、能回答常見考題**。
 - 網站要能一直長大：之後每上完一個主題，就照同一套規則加一頁，不需要重新設計。
 
@@ -70,7 +71,8 @@ os-notes/
 │   ├── 03-processes.html
 │   ├── 04-threads.html
 │   ├── 05-cpu-scheduling.html
-│   └── 06-synchronization.html
+│   ├── 06-synchronization.html
+│   └── 07-sync-examples.html
 └── templates/
     └── chapter.html        ← 新章節的起始模板，複製它來用
 ```
@@ -167,7 +169,7 @@ OS 很多主題都有好幾種解法（排程演算法、同步機制、置換�
 | 要素 | 規則 |
 |---|---|
 | 背景 | `--space`（接近純黑 #07080c）。星雲、星星、閃爍由 `body::before` / `body::after` 產生，流星和角落行星由 `site.js` 的 `.space-deco` 產生。**不要把背景改成藍色或淺色**，裝飾不能蓋到文字 |
-| 顏色 | 文字 `--text`（亮白）/ `--text-soft`；線條 `--line` / `--line-strong`；全站共用的重點色 `--gold`。**行星色** `--g1`～`--g6`：每一章依序自動分配一個（地球藍、火星紅、太陽黃、海王星紫、木星橘、金星粉），存在 CSS 變數 `--pc` |
+| 顏色 | 文字 `--text`（亮白）/ `--text-soft`；線條 `--line` / `--line-strong`；全站共用的重點色 `--gold`。**行星色** `--g1`～`--g7`：每一章依序自動分配一個（地球藍、火星紅、太陽黃、海王星紫、木星橘、金星粉、天王星青），超過 7 章就從頭循環，存在 CSS 變數 `--pc` |
 | 行星色用在哪裡 | 卡片上緣、卡片編號與插圖、太陽系裡的行星、章節頁的編號、h2/h3 前的符號、章節插圖。想指定顏色時，在 `CHAPTERS` 那一筆加 `color: "var(--g4)"` |
 | 字型 | 英文與數字：`--sans`（Space Grotesk），**標題用 600 粗字重**、內文 400；標籤、編號、程式碼：`--mono`（JetBrains Mono 500），標籤一律大寫加字距；中文用 **jf open 粉圓（Huninn）**，它只有一種粗細，全站設定了 `font-synthesis: none`，不要讓瀏覽器硬加粗。**不要用 300 以下的細字重**，小字不要小於 0.7rem |
 | 線條與圓角 | 線條一律 1px（強調時 2px，例如卡片上緣）。按鈕、標籤圓角 2～3px；段落區塊 20px，提醒框、名詞卡、程式碼、表格 12～14px |
@@ -185,7 +187,7 @@ OS 很多主題都有好幾種解法（排程演算法、同步機制、置換�
 
 ### 線條插圖 ICONS
 
-插圖放在 `assets/site.js` 的 `ICONS` 物件，目前有：`monitor`、`clock`、`lock`、`chip`、`layers`、`threads`、`planet`、`moon`、`disk`、`sparkle`。
+插圖放在 `assets/site.js` 的 `ICONS` 物件，目前有：`monitor`、`clock`、`lock`、`chip`、`layers`、`threads`、`table`（圓桌和筷子）、`planet`、`moon`、`disk`、`sparkle`。
 新章節優先從現有的挑一個最貼近主題的。如果都不合適，可以新增一個，規則是：
 
 - `viewBox="0 0 64 64"`，只寫形狀內容，外層 `<svg>` 由 `icon()` 函式產生。
@@ -211,7 +213,7 @@ OS 很多主題都有好幾種解法（排程演算法、同步機制、置換�
   <dd>CPU 從一個 process 換到另一個 process 時，保存舊的狀態、載入新的狀態。</dd>
 </dl>
 
-<!-- 程式碼：pseudocode 用 class="pseudo"；真的程式碼依語言用 class="lang-c"、"lang-py"、"lang-sh"，標籤一定要和語言一致 -->
+<!-- 程式碼：pseudocode 用 class="pseudo"；真的程式碼依語言用 class="lang-c"、"lang-py"、"lang-sh"、"lang-java"，標籤一定要和語言一致 -->
 <pre class="pseudo"><code>...</code></pre>
 <pre class="lang-c"><code>...</code></pre>
 
@@ -256,6 +258,13 @@ OS 很多主題都有好幾種解法（排程演算法、同步機制、置換�
 | deadlock | deadlock（死結） |
 | starvation | starvation（飢餓） |
 | semaphore | semaphore（號誌） |
+| monitor | monitor（監視器） |
+| condition variable | condition variable（條件變數） |
+| liveness | liveness（活性） |
+| priority inversion | priority inversion（優先權反轉） |
+| bounded buffer | bounded buffer（有限緩衝區） |
+| readers-writers problem | readers-writers problem（讀者寫者問題） |
+| dining-philosophers problem | dining-philosophers problem（哲學家用餐問題） |
 | mutex | mutex lock（互斥鎖） |
 | page / frame | page（分頁）/ frame（頁框） |
 | virtual memory | virtual memory（虛擬記憶體） |
@@ -314,8 +323,8 @@ OS 很多主題都有好幾種解法（排程演算法、同步機制、置換�
 | 03 | 行程 Processes | 03_OS_Processes | p.125 至 p.166 | ✅ |
 | 04 | 執行緒與並行 Threads & Concurrency | 04_OS_ThreadsConcurrency | p.167 至 p.200 | ✅ |
 | 05 | CPU 排程 CPU Scheduling | 05_OS_CPU_Scheduling | p.201 至 p.233 | ✅ |
-| 06 | 同步工具 Synchronization Tools | 06-07_OS_Synchronization（前半） | 尚無 | ✅ |
-| 07 | 同步範例 Synchronization Examples | 待上課 | | ⬜ |
+| 06 | 同步工具 Synchronization Tools | 06-07_OS_Synchronization_Tools & Synchronization_Examples-1、-2（p.1 至 p.11、p.21 至 p.27、p.39 至 p.41） | 尚無 | ✅ |
+| 07 | 同步範例 Synchronization Examples | 06-07_OS_Synchronization_Tools & Synchronization_Examples-2（p.11 至 p.20、p.23、p.28 至 p.38） | 尚無 | ✅ |
 | 08 | 死結 Deadlocks | 待上課 | | ⬜ |
 | 09 | 主記憶體 Main Memory | 待上課 | | ⬜ |
 | 10 | 虛擬記憶體 Virtual Memory | 待上課 | | ⬜ |
