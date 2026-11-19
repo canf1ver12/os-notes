@@ -26,6 +26,7 @@
   --g4: #e3a464;  /* 木星 */
   --g5: #9b8cff;  /* 海王星 */
   --g6: #f39ac0;  /* 金星 */
+  --g7: #5fd8c4;  /* 天王星 */
   --pc: var(--gold); /* 目前章節的行星色，由 site.js 設定 */
 
   --sans: "Space Grotesk", "Huninn", system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
@@ -356,7 +357,7 @@ pre {
   border: 1px solid var(--line);
   border-top: 1px solid var(--line-strong);
 }
-pre.pseudo::before, pre.lang-c::before, pre.lang-py::before, pre.lang-sh::before {
+pre.pseudo::before, pre.lang-c::before, pre.lang-py::before, pre.lang-sh::before, pre.lang-java::before {
   position: absolute; top: 0.45rem; left: 1.3rem;
   font-family: var(--mono); font-weight: 500; font-size: 0.7rem; letter-spacing: 0.2em; color: var(--gold);
 }
@@ -364,6 +365,7 @@ pre.pseudo::before { content: "● PSEUDOCODE"; }
 pre.lang-c::before { content: "● C"; }
 pre.lang-py::before { content: "● PYTHON"; }
 pre.lang-sh::before { content: "● SHELL"; }
+pre.lang-java::before { content: "● JAVA"; }
 pre.diagram { padding-top: 1.1rem; background: transparent; border-style: dashed; color: var(--text); line-height: 1.45; }
 
 .table-wrap { overflow-x: auto; margin: 1.4rem 0; }
@@ -377,9 +379,10 @@ tr.best td { background: var(--gold-soft); }
 
 details.quiz { margin: 0.8rem 0; padding: 0.9rem 1.2rem; background: var(--panel); border: 1px solid var(--line); transition: border-color 0.2s; }
 details.quiz:hover { border-color: var(--line-strong); }
-details.quiz summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; gap: 1rem; }
+/* 不用 flex：題目裡混了 <code> 時，flex 會把文字切成好幾欄、擠出畫面 */
+details.quiz summary { cursor: pointer; list-style: none; display: block; position: relative; padding-right: 1.8rem; }
 details.quiz summary::-webkit-details-marker { display: none; }
-details.quiz summary::after { content: "+"; flex: none; font-family: var(--mono); font-size: 1.1rem; line-height: 1.5; color: var(--gold); transition: transform 0.2s; }
+details.quiz summary::after { content: "+"; position: absolute; right: 0; top: 0; font-family: var(--mono); font-size: 1.1rem; line-height: 1.5; color: var(--gold); transition: transform 0.2s; }
 details.quiz[open] { border-color: rgba(231, 194, 124, 0.45); }
 details.quiz[open] summary::after { transform: rotate(45deg); }
 details.quiz[open] summary { margin-bottom: 0.7rem; padding-bottom: 0.7rem; border-bottom: 1px dashed var(--line); }
@@ -483,10 +486,11 @@ mark.hl.flash { animation: hl-blink 0.9s ease-in-out 4; }
   .layout { grid-template-columns: 1fr; padding: 2rem 1.1rem 3rem; gap: 0; }
   .sidebar { display: none; position: static; max-height: none; margin-bottom: 2rem; padding: 1rem 1.2rem; background: var(--space-2); border: 1px solid var(--line); }
   .sidebar.open { display: block; }
-  .chapter-head { grid-template-columns: 1fr 86px; gap: 0 1rem; }
+  .chapter-head { grid-template-columns: minmax(0, 1fr) 86px; gap: 0 1rem; }
   .chapter-doodle { width: 86px; height: 86px; }
   .chapter-doodle .core { inset: 29px; }
-  .chapter-head .en { font-size: 2.4rem; }
+  /* 英文標題有長單字（Synchronization）時跟著螢幕寬度縮小，避免把右邊的軌道圖擠出畫面 */
+  .chapter-head .en { font-size: clamp(1.6rem, 7.4vw, 2.4rem); overflow-wrap: anywhere; }
   .chapter-head h1 { font-size: 1rem; letter-spacing: 0.3em; }
   main.content h2 { font-size: 1.35rem; margin-top: 3rem; }
   .pager { flex-direction: column; }

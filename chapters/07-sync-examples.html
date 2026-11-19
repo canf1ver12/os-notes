@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>07 同步範例 Synchronization Examples｜OS 課程筆記</title>
+  <link rel="stylesheet" href="../assets/fonts/fonts.css">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root=".." data-chapter="07-sync-examples">
+  <header class="site-header">
+    <a class="brand" href="../index.html">OS notes</a>
+    <button class="menu-btn" id="menu-btn" type="button">章節</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="content">
+      <header class="chapter-head">
+        <p class="eyebrow">CHAPTER 07</p>
+        <h1>同步範例</h1>
+        <p class="en">Synchronization Examples</p>
+      </header>
+
+      <h2 id="key-points">本章重點</h2>
+      <div class="summary-box">
+        <ul>
+          <li>這章用上一章的 semaphore 和 monitor，解三個經典的同步問題：bounded buffer、readers-writers、dining philosophers。</li>
+          <li>Bounded buffer 要三個 semaphore：mutex 保護 buffer、empty 數空位、full 數產品，因為對生產者和消費者來說「資源」的意義不同。</li>
+          <li>Readers-writers 允許很多 reader 同時讀，但 writer 要獨佔；先照顧 reader 的版本 writer 可能 starvation，先照顧 writer 的版本 reader 可能 starvation。</li>
+          <li>Dining philosophers 如果每個人都先拿左邊的筷子，可能 deadlock；用 monitor 規定「兩支筷子都有才能拿」就能避免。</li>
+          <li>實際寫程式時，POSIX 用 sem_init、sem_wait、sem_post；Java 有 Semaphore 類別，也能用 synchronized 把物件變成 monitor。</li>
+        </ul>
+      </div>
+
+      <h2 id="concepts">核心觀念</h2>
+
+      <h3>Bounded-buffer problem</h3>
+      <p>這就是第 03 章看過的 producer-consumer 問題，現在用 semaphore 來解。共用一個有 n 格的 buffer，每格放一個 item：</p>
+      <ul>
+        <li><strong>Producer</strong>：拿一個空格、把 item 放進去；沒有空格時要等。</li>
+        <li><strong>Consumer</strong>：從 buffer 拿走一個 item、把空格還回去；buffer 全空時要等。</li>
+      </ul>
+      <p>需要三個 semaphore：</p>
+      <dl class="terms">
+        <dt>mutex = 1</dt>
+        <dd>當 boolean 用，控制 critical section，同一時間只有一個人能改 buffer。</dd>
+        <dt>empty = n</dt>
+        <dd>管控空位的個數，producer 放東西前要先 wait(empty)。</dd>
+        <dt>full = 0</dt>
+        <dd>管控產品的個數，consumer 拿東西前要先 wait(full)。</dd>
+      </dl>
+      <p>為什麼同時要有 empty 和 full？因為對生產者和消費者來說，「資源」的意義不同。生產者要的資源是空位，消費者要的資源是產品，兩個人等的東西不一樣，所以各用一個計數器。</p>
+      <ul>
+        <li>producer 放完之後 <code>signal(full)</code>：產品加一，叫醒可能在等的消費者。</li>
+        <li>consumer 拿完之後 <code>signal(empty)</code>：空位加一，叫醒可能在等的生產者。</li>
+      </ul>
+      <div class="callout warn">
+        <strong>常見錯誤</strong>
+        <p>wait 的順序要<strong>先等資源，再拿鎖</strong>。如果 producer 寫成先 <code>wait(mutex)</code> 再 <code>wait(empty)</code>，buffer 滿的時候它會拿著 mutex 去睡覺等空位，但 consumer 要先拿到 mutex 才能拿走東西、產生空位，兩邊互相等，就 deadlock 了。</p>
+      </div>
+
+      <h3>Readers-writers problem</h3>
+      <p>好幾個 process 共用一個資料庫，分成兩種：</p>
+      <dl class="terms">
+        <dt>Reader</dt>
+        <dd>只讀資料。很多個 reader 可以同時讀，因為讀不會改到資料。</dd>
+        <dt>Writer</dt>
+        <dd>會讀也會寫。同一時間只能有一個 writer，而且寫的時候也不能有人在讀。</dd>
+      </dl>
+      <p>依照優先順序的不同，有兩種版本：</p>
+      <ul>
+        <li><strong>First readers-writers problem</strong>：一旦 reader 拿到鎖，要等所有 reader 都讀完才會釋放，所以只要一直有 reader 進來，<strong>writer 可能 starvation</strong>。</li>
+        <li><strong>Second readers-writers problem</strong>：writer 一旦準備好，就不能再有新的 reader 開始讀，所以換成 <strong>reader 可能 starvation</strong>。</li>
+      </ul>
+
+      <h3>First readers-writers 的做法</h3>
+      <p>需要兩個 semaphore 和一個計數器：</p>
+      <dl class="terms">
+        <dt>rw_mutex = 1</dt>
+        <dd>保護資料庫，reader 和 writer 共用，防止 writer 在別人讀的時候寫入。</dd>
+        <dt>mutex = 1</dt>
+        <dd>保護 read_count，只有 reader 之間共用。</dd>
+        <dt>read_count = 0</dt>
+        <dd>現在有幾個 reader 在讀。</dd>
+      </dl>
+      <ul>
+        <li><strong>Writer</strong>：直接 wait(rw_mutex)，寫完 signal(rw_mutex)。</li>
+        <li><strong>第一個 reader</strong>（read_count 從 0 變 1）：代表所有 reader 去拿 rw_mutex，拿到之後後面的 reader 都能直接進來讀。</li>
+        <li><strong>最後一個 reader</strong>（read_count 從 1 變 0）：代表所有 reader 釋放 rw_mutex，writer 才能進去。</li>
+      </ul>
+      <p>生活例子：圖書館的閱覽室，第一個進去的讀者開燈並掛上「閱讀中」的牌子，後面的讀者看到燈亮著就直接進去；最後一個離開的讀者才關燈拿掉牌子，要整理書架的館員（writer）這時才能進去。只要讀者一直來，館員就一直進不去。</p>
+
+      <h3>Dining-philosophers problem</h3>
+      <p>5 個哲學家坐在圓桌的 5 張椅子上，桌上只有 5 支筷子，每兩個人中間放一支。</p>
+      <ul>
+        <li>哲學家不是在思考就是在吃飯。思考時不會和其他 4 個人互動。</li>
+        <li>吃飯需要手上有 2 支筷子，而且一次只能拿起 1 支。</li>
+        <li>吃完就把兩支筷子都放下。</li>
+      </ul>
+      <p>這個問題包含了同步的三種難題：</p>
+      <ul>
+        <li><strong>資源競爭</strong>：一支筷子同時只能被一個人拿著（mutual exclusion）。</li>
+        <li><strong>Deadlock</strong>：大家都卡住，沒人能吃（progress）。</li>
+        <li><strong>Starvation</strong>：某個人一直吃不到（bounded waiting）。</li>
+      </ul>
+
+      <h3>錯誤解法：每個人先拿左邊</h3>
+      <p>每支筷子用一個初始值 1 的 semaphore 表示。哲學家 i 先 wait 左邊的筷子 chopstick[i]，再 wait 右邊的筷子 chopstick[(i+1) % 5]，吃完再兩支都 signal。</p>
+      <p>問題是：如果 5 個人同時肚子餓，每個人都剛好拿起自己左邊的筷子，5 支筷子全被拿走，每個人都在等右邊的人放下筷子，但沒有人會放，就 deadlock 了。</p>
+      <p>可能的解法：</p>
+      <ol>
+        <li><strong>最多只讓 4 個人同時坐在桌邊</strong>：4 個人分 5 支筷子，至少有一個人能拿到兩支。</li>
+        <li><strong>兩支筷子都有空才能拿</strong>：要拿就一次拿兩支，不會拿著一支卡住。下面的 monitor 解法就是這個做法。</li>
+        <li><strong>不對稱</strong>：奇數號的人先拿左邊再拿右邊，偶數號的人先拿右邊再拿左邊，打破所有人都在等同一個方向的循環。</li>
+      </ol>
+
+      <h3>Dining philosophers 的 monitor 解法</h3>
+      <p>monitor <code>DiningPhilosophers</code> 裡面有：</p>
+      <ul>
+        <li><code>state[5]</code>：每個哲學家的狀態，thinking、hungry 或 eating。</li>
+        <li><code>condition self[5]</code>：每個哲學家一個 condition variable，拿不到筷子時就在自己的 self[i] 上等。</li>
+        <li><code>pickup(i)</code>、<code>putdown(i)</code>、<code>test(i)</code> 三個 method。</li>
+      </ul>
+      <p>為什麼要用 condition variable？因為要指定「特定的哪個哲學家」去等或被叫醒，monitor 本身的 entry queue 做不到這件事。</p>
+      <ul>
+        <li><strong>test(i)</strong>：檢查哲學家 i 能不能開始吃。條件是自己餓了，而且左右兩邊的人都沒在吃。成立就把 state[i] 改成 eating，並 self[i].signal()。</li>
+        <li><strong>pickup(i)</strong>：把自己設成 hungry，呼叫 test(i) 試著吃；如果沒有變成 eating（剛好隔壁有人在吃），就 self[i].wait() 等待被叫醒。</li>
+        <li><strong>putdown(i)</strong>：吃飽後設成 thinking，然後幫左右兩邊各 test 一次，給他們各一次吃飯的機會。</li>
+      </ul>
+      <p>使用方式是每個哲學家 i 都依序呼叫 <code>DiningPhilosophers.pickup(i)</code>、吃飯、<code>DiningPhilosophers.putdown(i)</code>。這個解法不會 deadlock，但有可能某個哲學家一直被左右輪流搶先，還是可能 starvation。</p>
+
+      <h3>POSIX semaphore</h3>
+      <p>POSIX 提供的 semaphore 函式：</p>
+      <dl class="terms">
+        <dt>sem_init(sem_t *sem, int pshared, unsigned int value)</dt>
+        <dd>建立 semaphore。pshared 設定能不能讓不同 process 共用，設成 0 就只能給同一個 process 的 thread 用；value 是初始值，也就是一開始有多少資源。</dd>
+        <dt>sem_wait(sem_t *sem)</dt>
+        <dd>等同於 wait。</dd>
+        <dt>sem_post(sem_t *sem)</dt>
+        <dd>等同於 signal。</dd>
+        <dt>sem_getvalue(sem_t *sem, int *valptr)</dt>
+        <dd>讀出 semaphore 目前的值。</dd>
+        <dt>sem_destroy(sem_t *sem)</dt>
+        <dd>用完後銷毀 semaphore。</dd>
+      </dl>
+
+      <h3>Java semaphore 和 Java monitor</h3>
+      <p>Java 的 <code>java.util.concurrent.Semaphore</code> 用建構子 <code>Semaphore(int value)</code> 設定初始值，<code>acquire()</code> 等同 wait、<code>release()</code> 等同 signal。</p>
+      <p>Java 也內建 monitor 的概念：</p>
+      <ul>
+        <li>每個 Java 物件都有一個鎖。</li>
+        <li>把 method 宣告成 <code>synchronized</code>，就會變成 monitor：呼叫的 thread 要先拿到這個物件的鎖才能執行。</li>
+        <li>拿不到鎖的其他 thread 在 <strong>entry set</strong> 裡等待。</li>
+      </ul>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>注意是 entry <strong>set</strong> 不是 list，set 不保證次序，所以先來等的 thread 不一定先拿到鎖。</p>
+      </div>
+
+      <h2 id="example">實際例子</h2>
+
+      <h3>追蹤 bounded buffer 的三個 semaphore</h3>
+      <p>buffer 有 3 格，一開始 empty = 3、full = 0、mutex = 1。producer 和 consumer 依下面的順序執行（mutex 每次都拿了又放回 1，表格省略）：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">步驟</th><th>動作</th><th class="num">empty</th><th class="num">full</th><th>buffer</th><th>說明</th></tr></thead>
+          <tbody>
+            <tr><td class="num">0</td><td>初始</td><td class="num">3</td><td class="num">0</td><td>空</td><td>3 個空位、0 個產品</td></tr>
+            <tr><td class="num">1</td><td>P 放入 A</td><td class="num">2</td><td class="num">1</td><td>A</td><td>wait(empty) 減一，signal(full) 加一</td></tr>
+            <tr><td class="num">2</td><td>P 放入 B</td><td class="num">1</td><td class="num">2</td><td>A B</td><td></td></tr>
+            <tr><td class="num">3</td><td>C 拿走 A</td><td class="num">2</td><td class="num">1</td><td>B</td><td>wait(full) 減一，signal(empty) 加一</td></tr>
+            <tr><td class="num">4</td><td>P 放入 C</td><td class="num">1</td><td class="num">2</td><td>B C</td><td></td></tr>
+            <tr><td class="num">5</td><td>P 放入 D</td><td class="num">0</td><td class="num">3</td><td>B C D</td><td>buffer 滿了</td></tr>
+            <tr><td class="num">6</td><td>P 想放入 E</td><td class="num">−1</td><td class="num">3</td><td>B C D</td><td>沒空位，P 在 empty 上 sleep</td></tr>
+            <tr><td class="num">7</td><td>C 拿走 B</td><td class="num">0</td><td class="num">2</td><td>C D</td><td>signal(empty) 後仍小於等於 0，叫醒 P</td></tr>
+            <tr><td class="num">8</td><td>P 醒來放入 E</td><td class="num">0</td><td class="num">3</td><td>C D E</td><td>signal(full) 加一</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>第 6 步 producer 被卡住，要等第 7 步 consumer 的 signal(empty) 才能再寫入，這就是 empty 的用途。</p>
+
+      <h3>為什麼 first readers-writers 會讓 writer 餓死</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">時間</th><th>事件</th><th class="num">read_count</th><th>rw_mutex 在誰手上</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>R1 進來讀，是第一個 reader，拿 rw_mutex</td><td class="num">1</td><td>reader 們</td></tr>
+            <tr><td class="num">2</td><td>R2 進來讀，不用再拿 rw_mutex</td><td class="num">2</td><td>reader 們</td></tr>
+            <tr><td class="num">3</td><td>W 想寫，wait(rw_mutex)，只能等</td><td class="num">2</td><td>reader 們</td></tr>
+            <tr><td class="num">4</td><td>R1 讀完離開</td><td class="num">1</td><td>reader 們</td></tr>
+            <tr><td class="num">5</td><td>R3 進來讀，read_count 不是 0 變 1，直接進去</td><td class="num">2</td><td>reader 們</td></tr>
+            <tr><td class="num">6</td><td>R2、R3 都讀完，最後一個 reader 釋放 rw_mutex</td><td class="num">0</td><td>W</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>W 在第 3 步就到了，卻要等到第 6 步。如果 R3 之後一直有新的 reader 在 read_count 還沒歸零前進來，W 就會永遠等下去。</p>
+
+      <h3>Dining philosophers 的 monitor 解法實際跑一次</h3>
+      <p>一開始 5 個哲學家都在 thinking。P1 和 P2 是鄰居，先後想吃飯：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">步驟</th><th>呼叫</th><th>發生什麼事</th><th>P1</th><th>P2</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>P1：pickup(1)</td><td>state[1] = hungry，test(1)：左邊 P0、右邊 P2 都沒在吃，成立</td><td>eating</td><td>thinking</td></tr>
+            <tr><td class="num">2</td><td>P2：pickup(2)</td><td>state[2] = hungry，test(2)：左邊 P1 正在吃，不成立，所以 self[2].wait()</td><td>eating</td><td>hungry（等待中）</td></tr>
+            <tr><td class="num">3</td><td>P1：putdown(1)</td><td>state[1] = thinking，test(0)：P0 沒有餓，什麼都不做</td><td>thinking</td><td>hungry（等待中）</td></tr>
+            <tr><td class="num">4</td><td>（putdown 繼續）</td><td>test(2)：P2 餓了，左邊 P1、右邊 P3 都沒在吃，成立，state[2] = eating，self[2].signal()</td><td>thinking</td><td>eating</td></tr>
+            <tr><td class="num">5</td><td>P2：putdown(2)</td><td>吃完放下筷子，回到 thinking</td><td>thinking</td><td>thinking</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>第 2 步 P2 不會拿著一支筷子等，而是什麼都沒拿就在 self[2] 上等，這就是「兩支都有才拿」的意思，所以不會出現每個人都拿著一支的 deadlock。</p>
+
+      <h3>用 POSIX semaphore 寫 bounded buffer</h3>
+      <pre class="lang-c"><code>#include &lt;stdio.h&gt;
+#include &lt;pthread.h&gt;
+#include &lt;semaphore.h&gt;
+
+#define BUFFER_SIZE 5
+#define ITEMS 10
+
+int buffer[BUFFER_SIZE];
+int in = 0, out = 0;
+
+sem_t mutex;    // 控制 critical section，初始 1
+sem_t empty;    // 空位數，初始 BUFFER_SIZE
+sem_t full;     // 產品數，初始 0
+
+void *producer(void *arg) {
+    for (int item = 1; item &lt;= ITEMS; item++) {
+        sem_wait(&amp;empty);              // 等到有空位
+        sem_wait(&amp;mutex);
+        buffer[in] = item;
+        in = (in + 1) % BUFFER_SIZE;
+        sem_post(&amp;mutex);
+        sem_post(&amp;full);               // 產品 +1，叫醒可能在等的消費者
+    }
+    return NULL;
+}
+
+void *consumer(void *arg) {
+    int sum = 0;
+    for (int i = 0; i &lt; ITEMS; i++) {
+        sem_wait(&amp;full);               // 等到有產品
+        sem_wait(&amp;mutex);
+        int item = buffer[out];
+        out = (out + 1) % BUFFER_SIZE;
+        sem_post(&amp;mutex);
+        sem_post(&amp;empty);              // 空位 +1，叫醒可能在等的生產者
+        printf(&quot;consumed %d\n&quot;, item);
+        sum += item;
+    }
+    printf(&quot;sum = %d\n&quot;, sum);
+    return NULL;
+}
+
+int main(void) {
+    sem_init(&amp;mutex, 0, 1);            // pshared = 0：只給同一個 process 的 thread 用
+    sem_init(&amp;empty, 0, BUFFER_SIZE);
+    sem_init(&amp;full, 0, 0);
+
+    pthread_t p, c;
+    pthread_create(&amp;p, NULL, producer, NULL);
+    pthread_create(&amp;c, NULL, consumer, NULL);
+    pthread_join(p, NULL);
+    pthread_join(c, NULL);
+
+    sem_destroy(&amp;mutex);
+    sem_destroy(&amp;empty);
+    sem_destroy(&amp;full);
+    return 0;
+}</code></pre>
+      <p>編譯：<code>gcc bounded_buffer.c -o bounded_buffer -pthread</code></p>
+      <p>預期輸出：依序印出 <code>consumed 1</code> 到 <code>consumed 10</code>，最後印 <code>sum = 55</code>。buffer 是 FIFO，所以不管兩個 thread 怎麼交錯，消費的順序都和生產的順序一樣。</p>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>macOS 不支援 <code>sem_init</code> 這種沒有名字的 semaphore（編譯會有 deprecated 警告，執行時會失敗），這段程式請在 Linux 上跑。macOS 上要改用 <code>sem_open</code> 建立有名字的 semaphore，細節依系統而異。</p>
+      </div>
+
+      <h3>Java 的寫法</h3>
+      <p>Semaphore 的用法：</p>
+      <pre class="lang-java"><code>Semaphore sem = new Semaphore(1);    // 建構子 Semaphore(int value)
+
+try {
+    sem.acquire();                   // 等同 wait
+    /* critical section */
+}
+catch (InterruptedException ie) { }
+finally {
+    sem.release();                   // 等同 signal，放在 finally 保證一定會釋放
+}</code></pre>
+      <p>用 synchronized 把物件變成 monitor：</p>
+      <pre class="lang-java"><code>public class BoundedBuffer&lt;E&gt; {
+    private int count = 0;
+
+    // 呼叫這個 method 的 thread 要先拿到這個物件的鎖
+    public synchronized void insert(E item) {
+        ...
+    }
+
+    public synchronized E remove() {
+        ...
+    }
+}</code></pre>
+
+      <h2 id="pseudocode">Pseudocode</h2>
+
+      <h3>Bounded buffer</h3>
+      <pre class="pseudo"><code>n = 10                   // buffer 大小
+semaphore mutex = 1      // 控制 critical section
+semaphore empty = n      // 空位個數
+semaphore full  = 0      // 產品個數
+
+// Producer
+WHILE true
+    item = produce()
+    wait(empty)          // 等到空位 &gt; 0
+    wait(mutex)
+    buffer.add(item)
+    signal(mutex)
+    signal(full)         // 產品 +1，叫醒可能在等的消費者
+END WHILE
+
+// Consumer
+WHILE true
+    wait(full)           // 等到產品 &gt; 0
+    wait(mutex)
+    item = buffer.remove()
+    signal(mutex)
+    signal(empty)        // 空位 +1，叫醒可能在等的生產者
+    consume(item)
+END WHILE</code></pre>
+
+      <h3>First readers-writers</h3>
+      <pre class="pseudo"><code>semaphore rw_mutex = 1   // 保護資料庫，reader 和 writer 共用
+semaphore mutex = 1      // 保護 read_count，reader 之間共用
+read_count = 0
+
+// Writer
+WHILE true
+    wait(rw_mutex)
+    // 寫入資料
+    signal(rw_mutex)
+END WHILE
+
+// Reader
+WHILE true
+    wait(mutex)
+    read_count = read_count + 1
+    IF read_count == 1 THEN      // 第一個 reader
+        wait(rw_mutex)           // 代表所有 reader 拿鎖
+    END IF
+    signal(mutex)
+
+    // 讀取資料
+
+    wait(mutex)
+    read_count = read_count - 1
+    IF read_count == 0 THEN      // 最後一個 reader
+        signal(rw_mutex)         // 代表所有 reader 放鎖
+    END IF
+    signal(mutex)
+END WHILE</code></pre>
+
+      <h3>Dining philosophers：會 deadlock 的寫法</h3>
+      <pre class="pseudo"><code>semaphore chopstick[5] = {1, 1, 1, 1, 1}
+
+// 哲學家 i
+WHILE true
+    wait(chopstick[i])               // 等待並拿左筷
+    wait(chopstick[(i + 1) % 5])     // 等待並拿右筷
+    // 吃一會兒
+    signal(chopstick[i])
+    signal(chopstick[(i + 1) % 5])
+    // 思考一會兒
+END WHILE</code></pre>
+
+      <h3>Dining philosophers：monitor 解法</h3>
+      <pre class="pseudo"><code>MONITOR DiningPhilosophers
+    state[5]                 // THINKING、HUNGRY、EATING
+    condition self[5]        // 拿不到筷子時在這裡等
+
+    FUNCTION pickup(i)       // 哲學家 i 想拿筷子
+        state[i] = HUNGRY
+        test(i)
+        IF state[i] != EATING THEN
+            self[i].wait()   // test 失敗，隔壁有人在吃，等待被叫醒
+        END IF
+    END FUNCTION
+
+    FUNCTION putdown(i)      // 吃飽後放下筷子
+        state[i] = THINKING
+        test((i + 4) % 5)    // 給左邊一次機會
+        test((i + 1) % 5)    // 給右邊一次機會
+    END FUNCTION
+
+    FUNCTION test(i)         // 左右都沒在吃，而且自己餓了，才能開始吃
+        IF state[(i + 4) % 5] != EATING
+           AND state[i] == HUNGRY
+           AND state[(i + 1) % 5] != EATING THEN
+            state[i] = EATING
+            self[i].signal() // 開始吃
+        END IF
+    END FUNCTION
+
+    FUNCTION initialization_code()
+        FOR i = 0 TO 4
+            state[i] = THINKING
+        END FOR
+    END FUNCTION
+END MONITOR
+
+// 每個哲學家 i 的用法
+DiningPhilosophers.pickup(i)
+// 吃飯
+DiningPhilosophers.putdown(i)</code></pre>
+
+      <h2 id="comparison">比較整理</h2>
+      <p>三個經典問題：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>問題</th><th>共用的資源</th><th>用到的同步工具</th><th>主要的風險</th><th>對應的真實情境</th></tr></thead>
+          <tbody>
+            <tr><td>Bounded buffer</td><td>有 n 格的 buffer</td><td>mutex、empty、full 三個 semaphore</td><td>wait 順序寫錯會 deadlock</td><td>pipe、印表機佇列、producer-consumer</td></tr>
+            <tr><td>Readers-writers</td><td>共用的資料庫</td><td>rw_mutex、mutex 兩個 semaphore 加 read_count</td><td>writer 或 reader 其中一方 starvation</td><td>資料庫、設定檔、快取，讀很多寫很少的資料</td></tr>
+            <tr><td>Dining philosophers</td><td>5 支筷子，每個人要兩支</td><td>每支筷子一個 semaphore，或用 monitor 和 condition variable</td><td>deadlock、starvation</td><td>一個工作同時需要好幾個資源</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Dining philosophers 的三種解法：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>解法</th><th>怎麼避免 deadlock</th><th>缺點</th></tr></thead>
+          <tbody>
+            <tr><td>最多 4 個人同時入座</td><td>4 個人分 5 支筷子，至少一個人拿得到兩支</td><td>要多一個 semaphore 管座位，第 5 個人就算有筷子也要等</td></tr>
+            <tr><td>兩支都有才拿（monitor）</td><td>不會有人拿著一支在等另一支</td><td>仍可能 starvation</td></tr>
+            <tr><td>奇偶不對稱</td><td>拿筷子的方向不一致，不會形成大家都在等右邊的循環</td><td>規則比較不直覺，容易寫錯</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="quiz">自我測驗</h2>
+      <details class="quiz">
+        <summary>Q1. Bounded buffer 已經有 mutex 了，為什麼還需要 empty 和 full 兩個 semaphore？只用一個 count 可以嗎？</summary>
+        <p><strong>答案：</strong>需要兩個，因為生產者和消費者要等的資源不同，生產者等空位、消費者等產品。</p>
+        <p><strong>原因：</strong>mutex 只保證同時只有一個人改 buffer，不會告訴你 buffer 有沒有空位或有沒有東西。生產者在 buffer 滿時要睡在「空位」上，消費者在 buffer 空時要睡在「產品」上，兩邊被叫醒的條件不一樣，所以各用一個 semaphore，讓 signal(full) 只叫醒消費者、signal(empty) 只叫醒生產者。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q2. 如果 consumer 寫成先 <code>wait(mutex)</code> 再 <code>wait(full)</code>，什麼情況下會出事？</summary>
+        <p><strong>答案：</strong>buffer 是空的時候會 deadlock。</p>
+        <p><strong>原因：</strong>consumer 拿著 mutex 去等 full，但 producer 要放東西進 buffer 之前也要先拿 mutex，拿不到就放不進去，full 永遠不會增加。兩邊互相等對方手上的東西，就是 deadlock。所以要先等資源，再拿鎖。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q3. First readers-writers 裡，為什麼只有「第一個」reader 要 wait(rw_mutex)、「最後一個」reader 要 signal(rw_mutex)？</summary>
+        <p><strong>答案：</strong>因為很多 reader 可以同時讀，只要有一個 reader 拿到鎖，就代表整群 reader 擋住 writer。</p>
+        <p><strong>原因：</strong>如果每個 reader 都 wait(rw_mutex)，rw_mutex 初始值是 1，第二個 reader 就會被擋住，reader 就不能同時讀了。所以用 read_count 數人數，第一個進來的負責拿鎖、最後一個離開的負責放鎖，中間的 reader 直接進出。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q4. 5 個哲學家都先拿左邊的筷子，為什麼可能 deadlock？「最多只讓 4 個人坐下」為什麼能解決？</summary>
+        <p><strong>答案：</strong>5 個人同時拿起左邊的筷子後，每個人都在等右邊的人放下，形成循環等待。只讓 4 個人坐下時，至少有一個人能拿到兩支筷子。</p>
+        <p><strong>原因：</strong>4 個人分 5 支筷子，就算每個人都先拿起一支，還剩 1 支，坐在它旁邊的那個人一定能拿到第二支。他吃完放下兩支筷子後，旁邊的人也能接著吃，所以不會全部卡住。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q5. Monitor 解法的 pickup 裡，test(i) 失敗後為什麼要 self[i].wait()？之後是誰把他叫醒？</summary>
+        <p><strong>答案：</strong>test 失敗代表左邊或右邊有人正在吃，只能等。之後由旁邊吃完的人在 putdown 裡呼叫 test(i)，成立時用 self[i].signal() 把他叫醒。</p>
+        <p><strong>原因：</strong>每個哲學家有自己的 condition variable self[i]，所以能精準地叫醒「特定的那個人」。鄰居 putdown 時會幫左右各 test 一次，如果這個人還餓、而且兩邊都沒在吃，就把他設成 eating 並叫醒。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q6. 好幾個 thread 在等同一個 Java 物件的 synchronized method，最早來等的 thread 一定會最先拿到鎖嗎？</summary>
+        <p><strong>答案：</strong>不一定。</p>
+        <p><strong>原因：</strong>拿不到鎖的 thread 是放在 entry set 裡等，set 不保證次序，所以 JVM 選誰拿鎖不一定照到達的順序。</p>
+      </details>
+
+      <h2 id="reading">延伸閱讀</h2>
+      <ul>
+        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter 7 Synchronization Examples（Section 7.1 經典同步問題、7.3 POSIX Synchronization、7.4 Synchronization in Java）</li>
+        <li>上課投影片：06-07_OS_Synchronization_Tools &amp; Synchronization_Examples-2（p.11 至 p.20、p.23、p.28 至 p.38）</li>
+        <li>筆記：這一章還沒有筆記</li>
+      </ul>
+
+      <nav class="pager" id="pager"></nav>
+    </main>
+
+    <aside class="toc" id="toc"></aside>
+  </div>
+
+  <footer class="site-footer">OS Notes · 依照 CLAUDE.md 規則持續擴充</footer>
+  <script src="../assets/glossary.js"></script>
+  <script src="../assets/site.js"></script>
+</body>
+</html>

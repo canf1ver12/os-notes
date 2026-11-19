@@ -59,8 +59,18 @@ const CHAPTERS = [
     en: "Synchronization Tools",
     short: "Sync Tools",
     icon: "lock",
-    summary: "兩個 thread 同時改一個變數會出什麼事？從 race condition、Peterson 到 CAS 與 mutex。",
-    tags: ["race condition", "critical section", "Peterson", "CAS", "mutex"]
+    summary: "兩個 thread 同時改一個變數會出什麼事？從 race condition、CAS、mutex 到 semaphore 和 monitor。",
+    tags: ["race condition", "critical section", "semaphore", "monitor", "liveness"]
+  },
+  {
+    slug: "07-sync-examples",
+    no: "07",
+    title: "同步範例",
+    en: "Synchronization Examples",
+    short: "Sync Examples",
+    icon: "table",
+    summary: "用 semaphore 和 monitor 解三個經典問題：生產者消費者、讀者寫者、哲學家用餐。",
+    tags: ["bounded buffer", "readers-writers", "dining philosophers", "POSIX semaphore"]
   }
 ];
 
@@ -99,11 +109,19 @@ const ICONS = {
     <circle cx="32" cy="32" r="22"/>
     <circle cx="32" cy="32" r="5"/>
     <path d="M32 10v8M50 23l-7 4"/>`,
+  table: `
+    <circle cx="32" cy="32" r="22"/>
+    <circle cx="32.0" cy="19.0" r="4"/>
+    <circle cx="44.4" cy="28.0" r="4"/>
+    <circle cx="39.6" cy="42.5" r="4"/>
+    <circle cx="24.4" cy="42.5" r="4"/>
+    <circle cx="19.6" cy="28.0" r="4"/>
+    <path d="M37.3 24.7L42.6 17.4M40.6 34.8L49.1 37.6M32.0 41.0L32.0 50.0M23.4 34.8L14.9 37.6M26.7 24.7L21.4 17.4"/>`,
   sparkle: `<path class="fill" d="M32 4C33.6 25 39 30.4 60 32 39 33.6 33.6 39 32 60 30.4 39 25 33.6 4 32 25 30.4 30.4 25 32 4z"/>`
 };
 
 /* 行星色：第 1 章地球藍、第 2 章火星紅、第 3 章太陽黃…依序循環。CHAPTERS 裡寫 color 可以覆蓋 */
-const PLANET_COLORS = ["var(--g3)", "var(--g2)", "var(--g1)", "var(--g5)", "var(--g4)", "var(--g6)"];
+const PLANET_COLORS = ["var(--g3)", "var(--g2)", "var(--g1)", "var(--g5)", "var(--g4)", "var(--g6)", "var(--g7)"];
 const planetColor = (c) => c.color || PLANET_COLORS[CHAPTERS.indexOf(c) % PLANET_COLORS.length];
 
 /* 背景裝飾用的彩色小行星 */

@@ -29,8 +29,9 @@
           <li>多個 process / thread 同時改同一份資料，結果取決於執行順序，這叫 race condition，連 kernel 裡的變數都會發生。</li>
           <li>會碰到共用資料的那段程式叫 critical section，解法要滿足 mutual exclusion、progress、bounded waiting。</li>
           <li>軟體解法：強制輪流法缺 progress；Peterson's solution 三個條件都滿足，但現代 CPU 會重排指令，需要 memory barrier。</li>
-          <li>硬體支援：memory barrier、test_and_set、compare_and_swap（CAS），以及用 CAS 做出的 atomic variable。</li>
-          <li>給一般開發者用的高階工具是 mutex lock（通常實作成 spinlock），POSIX 用 pthread_mutex；semaphore 是下一份投影片的內容。</li>
+          <li>硬體支援：memory barrier、test_and_set、compare_and_swap（CAS），以及用 CAS 做出的 atomic variable；再往上一層是 mutex lock（通常實作成 spinlock）。</li>
+          <li>Semaphore 是管控資源的計數器，只能用 wait（P）和 signal（V）存取：大於 0 代表還有幾份資源，負數的絕對值代表有幾個人在排隊。</li>
+          <li>semaphore 很容易用錯，所以有更高階的 monitor：一次只讓一個 process 在裡面活動，再用 condition variable 控制誰要等、誰被叫醒；同步沒做好會出現 deadlock、priority inversion 這類 liveness 問題。</li>
         </ul>
       </div>
 
@@ -126,23 +127,115 @@ print x;</code></pre>
       </div>
 
       <h3>解法四：Semaphore</h3>
-      <div class="callout note">
-        <strong>補充</strong>
-        <p>依上課進度，semaphore 和下面的 bounded buffer 會在下一份投影片（Synchronization Examples）詳細介紹，這裡先整理概念。</p>
-      </div>
-      <p>semaphore（號誌）是一個整數 S，只能用兩個 atomic 操作去改：</p>
+      <p><strong>Semaphore</strong>（號誌、信號、旗號）是一個管控資源的計數器，只能透過兩個不可分割的 atomic 操作去存取：</p>
       <ul>
-        <li><code>wait(S)</code>（也寫作 P 或 down）：S 減一，如果變成負數就去睡。</li>
-        <li><code>signal(S)</code>（也寫作 V 或 up）：S 加一，如果有人在睡就叫醒一個。</li>
+        <li><strong>wait()</strong>：常叫做 <strong>P operation</strong>（荷蘭文 proberen，測試）。把計數器減一，如果沒有資源可用，這個 process 或 thread 就要排隊等待。</li>
+        <li><strong>signal()</strong>：常叫做 <strong>V operation</strong>（荷蘭文 verhogen，遞增）。把計數器加一，如果有人在等這個資源，就叫醒其中一個。</li>
       </ul>
-      <p>可以把 S 想成停車場的空位數：開進去前先 <code>wait</code>，沒位子就在門口等；開出來時 <code>signal</code>，讓門口的車進來。</p>
+      <p>可以把它想成停車場入口的空位看板：開進去前先 wait，沒位子就在門口排隊；開出來時 signal，讓排隊的第一台車進去。</p>
       <dl class="terms">
         <dt>Binary semaphore</dt>
-        <dd>初始值 1，只會是 0 或 1，用法跟 mutex 一樣。</dd>
+        <dd>計數器只會是 0 或 1，管控一個資源，行為和 mutex 類似。</dd>
         <dt>Counting semaphore</dt>
-        <dd>初始值 N，代表有 N 份資源可以同時給 N 個人用。</dd>
+        <dd>計數器可以是任意整數，管控同一種資源的好幾份。</dd>
       </dl>
-      <p>semaphore 比 mutex 更通用的地方是它還能拿來「排順序」：把 S 初始為 0，A 做完後 <code>signal(S)</code>，B 開始前 <code>wait(S)</code>，就能保證 B 一定在 A 之後。</p>
+      <p>counting semaphore 的計數器（#record）代表的意思：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>計數器的值</th><th>意思</th></tr></thead>
+          <tbody>
+            <tr><td>大於 1</td><td>還有好幾份資源可以用</td></tr>
+            <tr><td>等於 1</td><td>剛好剩一份</td></tr>
+            <tr><td>等於 0</td><td>缺貨，但沒有人在排隊</td></tr>
+            <tr><td>小於 0</td><td>缺貨，而且有人在排隊，負數的絕對值就是排隊的人數</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>用 semaphore 控制執行順序</h3>
+      <p>semaphore 不只能做互斥，還能排先後順序。假設希望 P1 的 S1 做完之後，P2 才執行 S2：建立一個初始值 0 的 semaphore <code>synch</code>，P1 做完 S1 後 <code>signal(synch)</code>，P2 在 S2 前面 <code>wait(synch)</code>。</p>
+      <ul>
+        <li>P2 先跑到 wait：計數器是 0，代表一開始就鎖住，P2 只能等。</li>
+        <li>P1 做完 S1 並 signal：計數器加一，P2 才能往下執行 S2。</li>
+      </ul>
+
+      <h3>Semaphore 的實作</h3>
+      <p>最直覺的寫法是讓 wait() 在計數器小於等於 0 時一直空轉，等到大於 0 才減一，這其實就是 spinlock，會 busy waiting。實際的實作改成 <strong>non-busy waiting</strong>：semaphore 除了整數 <code>value</code>，還帶一條 PCB list 當作 waiting queue。</p>
+      <ul>
+        <li><strong>wait</strong>：先把 value 減一，如果變成負數，就把自己加進 list，然後 sleep（進入 waiting、讓出 CPU）。</li>
+        <li><strong>signal</strong>：先把 value 加一，如果 value 仍然小於等於 0，代表還有人在等，就從 list 拿出一個 process 並 wakeup。</li>
+      </ul>
+      <p>waiting queue 可以用任何能滿足 bounded waiting 的排隊方式，例如 FIFO，這樣排隊的人就不會永遠搶不到。</p>
+      <p>wait 和 signal 本身也是共用資料的操作，必須是 atomic。要怎麼保證？</p>
+      <ul>
+        <li><strong>單核心</strong>：在 wait 和 signal 執行期間關掉 interrupt。</li>
+        <li><strong>多核心</strong>：關掉所有核心的 interrupt 會嚴重影響效能，所以改用 spinlock 保護 wait 和 signal 這一小段程式，可以用軟體解法，也可以用 test_and_set、CAS 這類硬體指令（實作上也是 busy waiting）。因為 wait 和 signal 的程式很短，佔用的時間很短，用 spinlock 是可以接受的。</li>
+      </ul>
+
+      <h3>用 semaphore 解 n 個 process 的 critical section</h3>
+      <p>所有 process 共用一個初始值 1 的 semaphore <code>sem</code>，進 critical section 前 <code>wait(sem)</code>、出來後 <code>signal(sem)</code>。三個條件都滿足：</p>
+      <ul>
+        <li><strong>Mutual exclusion</strong>：計數器最多是 1，一次只有一個 process 能進 critical section。</li>
+        <li><strong>Progress</strong>：出來的人 signal 之後，critical section 一空出來，waiting list 的第一個就可以進去；出來的人想再進去，要回到 waiting list 重新排隊。</li>
+        <li><strong>Bounded waiting</strong>：進入 waiting list 排隊，而且不能插隊。</li>
+      </ul>
+      <div class="callout warn">
+        <strong>常見錯誤</strong>
+        <p>semaphore 解起來比較容易，但<strong>不保證正確</strong>，正不正確全看開發者有沒有把 wait 和 signal 放在對的位置、用對的順序。寫成 <code>signal(mutex) … critical section … wait(mutex)</code> 會讓好幾個人同時進去；寫成 <code>wait(mutex) … critical section … wait(mutex)</code> 會永遠卡住；漏寫其中一個也一樣會出事。</p>
+      </div>
+
+      <h3>解法五：Monitor</h3>
+      <p>因為 semaphore 太容易用錯，程式語言提供了更高階、模組化的同步工具 <strong>Monitor</strong>。它很像物件導向語言裡的 class：</p>
+      <ul>
+        <li>裡面有成員變數（共用資料）、操作這些資料的 method，以及初始化用的 constructor。</li>
+        <li>method 只能存取 monitor 自己的成員變數，以及透過參數傳進來的變數。</li>
+        <li><strong>同一時間只有一個 process 能在 monitor 裡活動</strong>，互斥由語言自動處理，開發者不用自己寫 wait 和 signal。</li>
+      </ul>
+      <p>生活例子：monitor 像一間只有一個櫃檯的銀行，所有業務都要到櫃檯辦，櫃檯一次只服務一個人，其他人在門口排隊，不可能兩個人同時改同一本存摺。</p>
+
+      <h3>Condition variable</h3>
+      <p>monitor 把整個物件鎖住，有時候不夠有效率，也不夠彈性。例如有好幾種不同的條件要等，就需要 <strong>condition variable</strong>（CV）。宣告 <code>condition x;</code> 之後，x 內部會維護一個 queue，等同於在 monitor 裡多開好幾條 waiting queue，可以自由控制哪個 thread 能進去。</p>
+      <dl class="terms">
+        <dt>x.wait()</dt>
+        <dd>呼叫的 process 被暫停，放進 x 的 queue，直到有別的 process 呼叫 x.signal()。</dd>
+        <dt>x.signal()</dt>
+        <dd>從 x 的 queue 裡恰好喚醒一個暫停的 process。如果 queue 裡沒有人，signal() 什麼事都不做。</dd>
+      </dl>
+      <div class="callout warn">
+        <strong>常見錯誤</strong>
+        <p>CV 的 signal 和 semaphore 的 signal 不一樣：semaphore 的 signal 一定會把計數器加一，就算現在沒人在等，之後來的人也用得到這次 signal；CV 的 signal 在沒人等的時候就直接消失，不會被記住。</p>
+      </div>
+
+      <h3>Signal 之後誰先跑：Hoare 和 Mesa</h3>
+      <p>假設 P 呼叫了 x.signal()，而 Q 正停在 x.wait()。Q 被叫醒之後，P 和 Q 都想在 monitor 裡繼續執行，但 monitor 同時只能有一個 process 活動，所以只能有一個繼續。要馬上讓 Q 跑，還是等 P 做完其他事離開後再讓 Q 跑？有兩種選擇：</p>
+      <dl class="terms">
+        <dt>Hoare：Signal and wait</dt>
+        <dd>P 等 Q。P 發出 signal 之後就暫停，直到 Q 離開 monitor 或去等另一個條件。</dd>
+        <dt>Mesa：Signal and continue</dt>
+        <dd>Q 等 P。被叫醒的 Q 要等到 P 離開 monitor 或去等另一個條件，才能繼續。</dd>
+      </dl>
+      <p>兩種各有優缺點，由程式語言的實作者決定要用哪一種。</p>
+
+      <h3>Liveness</h3>
+      <p>process 在搶鎖的時候，可能會無限期地等下去，這就違反了 progress 和 bounded waiting。<strong>Liveness</strong> 指的是系統必須滿足的一組性質，用來確保 process 能持續往下執行。下面兩個是常見的 liveness 問題。</p>
+
+      <h3>Liveness 問題一：Deadlock</h3>
+      <p><strong>Deadlock</strong>（死結）是兩個以上的 process 無限期地等待一個事件，而這個事件只有其中某個正在等的 process 才能觸發。</p>
+      <p>例子：S 和 Q 是兩個初始值 1 的 semaphore。P0 先 <code>wait(S)</code> 再 <code>wait(Q)</code>，P1 先 <code>wait(Q)</code> 再 <code>wait(S)</code>。</p>
+      <ul>
+        <li>P0 拿到 S、P1 拿到 Q，兩個計數器都變成 0。</li>
+        <li>P0 接著 wait(Q)，要等 P1 signal(Q)；P1 接著 wait(S)，要等 P0 signal(S)。</li>
+        <li>兩個 signal 都永遠不會執行到，形成循環等待（circular wait），P0 和 P1 就 deadlock 了。</li>
+      </ul>
+
+      <h3>Liveness 問題二：Priority inversion</h3>
+      <p>有三個 process L、M、H，優先權 H &gt; M &gt; L。H 需要 semaphore S，但 S 現在被 L 拿著，所以 H 要等 L 用完。這時候 M 變成 runnable，因為 M 比 L 優先，就把 L 搶走了。結果是：</p>
+      <ul>
+        <li>L 拿不到 CPU，沒辦法用完 S 再釋放。</li>
+        <li>H 只能繼續等 L，等於被優先權比它低的 M 間接拖住。</li>
+      </ul>
+      <p>高優先權的 process 反而要等低優先權的，這就叫 <strong>priority inversion</strong>（優先權反轉）。</p>
+      <p>解法是 <strong>priority-inheritance protocol</strong>（優先權繼承）：正在使用高優先權 process 所需資源的 process，會暫時繼承那個高優先權，直到用完資源為止。以上面的例子來說，L 暫時繼承 H 的優先權，M 就搶不走 L；L 用完 S 之後放掉繼承來的優先權，H 就能拿到 S。</p>
 
       <h2 id="example">實際例子</h2>
       <h3>手動追蹤 race condition</h3>
@@ -208,6 +301,54 @@ int main(void) {
         </table>
       </div>
       <p>在 Thread 2 的兩行中間加上 memory barrier 後，只剩第一種順序，一定印出 100。</p>
+
+      <h3>追蹤 counting semaphore 的計數器</h3>
+      <p>一間自習室有 2 個座位，用初始值 2 的 semaphore S 管控。A、B、C、D 四個人依序來，之後 A、B 離開：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">步驟</th><th>動作</th><th class="num">S.value</th><th>S.list（排隊的人）</th><th>說明</th></tr></thead>
+          <tbody>
+            <tr><td class="num">0</td><td>初始</td><td class="num">2</td><td>空</td><td>有 2 個座位</td></tr>
+            <tr><td class="num">1</td><td>A 呼叫 wait</td><td class="num">1</td><td>空</td><td>A 坐下</td></tr>
+            <tr><td class="num">2</td><td>B 呼叫 wait</td><td class="num">0</td><td>空</td><td>B 坐下，座位滿了，但沒人在排隊</td></tr>
+            <tr><td class="num">3</td><td>C 呼叫 wait</td><td class="num">−1</td><td>C</td><td>值小於 0，C 進 list 並 sleep</td></tr>
+            <tr><td class="num">4</td><td>D 呼叫 wait</td><td class="num">−2</td><td>C、D</td><td>2 個人在排隊，剛好是 −2 的絕對值</td></tr>
+            <tr><td class="num">5</td><td>A 呼叫 signal</td><td class="num">−1</td><td>D</td><td>加一後仍小於等於 0，叫醒 C，C 坐下</td></tr>
+            <tr><td class="num">6</td><td>B 呼叫 signal</td><td class="num">0</td><td>空</td><td>加一後仍小於等於 0，叫醒 D，D 坐下</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>注意第 5、6 步：signal 把值加一之後還是小於等於 0，代表有人在等，所以要從 list 叫醒一個人，而不是讓座位空著。</p>
+
+      <h3>Deadlock 的時間軸</h3>
+      <p>延續「核心觀念」裡 S、Q 的例子，兩個 semaphore 初始值都是 1：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">時間</th><th>P0</th><th>P1</th><th class="num">S</th><th class="num">Q</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>wait(S)，拿到 S</td><td></td><td class="num">0</td><td class="num">1</td></tr>
+            <tr><td class="num">2</td><td></td><td>wait(Q)，拿到 Q</td><td class="num">0</td><td class="num">0</td></tr>
+            <tr><td class="num">3</td><td>wait(Q)，Q 被 P1 拿著，sleep</td><td></td><td class="num">0</td><td class="num">−1</td></tr>
+            <tr><td class="num">4</td><td></td><td>wait(S)，S 被 P0 拿著，sleep</td><td class="num">−1</td><td class="num">−1</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>第 4 步之後兩個人都在睡，能叫醒 P0 的只有 P1 的 signal(Q)，能叫醒 P1 的只有 P0 的 signal(S)，誰都等不到，就是 deadlock。如果 P1 也照「先 S 再 Q」的順序拿，第 2 步 P1 就會在 S 上等，P0 可以順利拿到 Q、做完再全部 signal，不會卡住。</p>
+
+      <h3>Priority inversion 的時間軸</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">時間</th><th>沒有 priority inheritance</th><th>有 priority inheritance</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>L 拿到 semaphore S，開始用</td><td>L 拿到 semaphore S，開始用</td></tr>
+            <tr><td class="num">2</td><td>H 想要 S，只能等 L</td><td>H 想要 S，只能等 L；L 暫時繼承 H 的優先權</td></tr>
+            <tr><td class="num">3</td><td>M 變成 runnable，比 L 優先，搶走 CPU</td><td>M 變成 runnable，但 L 現在的優先權比 M 高，M 搶不走</td></tr>
+            <tr><td class="num">4</td><td>M 跑完，L 才繼續用 S</td><td>L 用完 S 並釋放，放掉繼承來的優先權</td></tr>
+            <tr><td class="num">5</td><td>L 釋放 S，H 終於拿到</td><td>H 拿到 S 開始執行，之後才輪到 M</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>左邊那欄 H 多等了 M 整段執行時間，這段等待跟 H 需要的資源完全無關，就是 priority inversion 的問題所在。</p>
 
       <h2 id="pseudocode">Pseudocode</h2>
       <h3>Peterson's solution（thread i，對方是 j = 1 − i）</h3>
@@ -316,57 +457,88 @@ FUNCTION release()
     available = true
 END FUNCTION</code></pre>
 
-      <h3>Semaphore（不 busy waiting 的版本）</h3>
-      <pre class="pseudo"><code>// S.value：整數；S.list：在等這個 semaphore 的 thread
+      <h3>Semaphore 概念版（busy waiting）</h3>
+      <pre class="pseudo"><code>// 只示意計數器怎麼控制，實際上就是 spinlock
+FUNCTION wait(S)
+    WHILE S &lt;= 0
+        // busy wait：大於 0 才繼續
+    END WHILE
+    S = S - 1
+END FUNCTION
+
+FUNCTION signal(S)
+    S = S + 1
+END FUNCTION</code></pre>
+
+      <h3>Semaphore 實作版（non-busy waiting）</h3>
+      <pre class="pseudo"><code>// S.value：整數，負數代表有幾個人在等
+// S.list：在等這個 semaphore 的 process（PCB list）
+// wait 和 signal 整個都必須是 atomic
 FUNCTION wait(S)
     S.value = S.value - 1
     IF S.value &lt; 0 THEN
-        S.list.add(current_thread)
-        block()               // 進入 waiting，讓出 CPU
+        S.list.add(current_process)   // 排隊
+        sleep()                       // 進入 waiting，讓出 CPU
     END IF
 END FUNCTION
 
 FUNCTION signal(S)
     S.value = S.value + 1
-    IF S.value &lt;= 0 THEN
-        t = S.list.remove()
-        wakeup(t)             // 把 t 移回 ready queue
+    IF S.value &lt;= 0 THEN              // 還有人在等
+        p = S.list.remove()
+        wakeup(p)                     // 把 p 移回 ready queue
     END IF
 END FUNCTION</code></pre>
       <div class="callout tip">
         <strong>記憶技巧</strong>
-        <p>S.value 是負數時，它的絕對值剛好等於「正在等的人數」。例如 S.value = −2 代表有兩個 thread 在排隊。</p>
+        <p>S.value 是負數時，它的絕對值剛好等於「正在等的人數」。例如 S.value = −2 代表有兩個 process 在排隊。</p>
       </div>
 
-      <h3>Bounded buffer（生產者與消費者）</h3>
-      <pre class="pseudo"><code>// buffer 有 n 格
-semaphore mutex = 1      // 保護 buffer 本身
-semaphore empty = n      // 空格數
-semaphore full  = 0      // 有東西的格數
+      <h3>n 個 process 的 critical section</h3>
+      <pre class="pseudo"><code>semaphore sem = 1              // 所有 process 共用
 
-// Producer
+// Process i
 WHILE true
-    item = produce()
-    wait(empty)          // 先確定有空格
-    wait(mutex)
-    buffer.add(item)
-    signal(mutex)
-    signal(full)         // 多一格有東西
-END WHILE
-
-// Consumer
-WHILE true
-    wait(full)           // 先確定有東西
-    wait(mutex)
-    item = buffer.remove()
-    signal(mutex)
-    signal(empty)        // 多一格空格
-    consume(item)
+    wait(sem)
+    // ===== critical section =====
+    signal(sem)
+    // remainder section
 END WHILE</code></pre>
-      <div class="callout warn">
-        <strong>常見錯誤</strong>
-        <p>Producer 如果寫成先 <code>wait(mutex)</code> 再 <code>wait(empty)</code>：buffer 滿的時候，它拿著 mutex 去睡覺等空格，但 consumer 要先拿到 mutex 才能拿走東西、產生空格，兩邊互相等，就 deadlock 了。原則是：<strong>先等資源，再拿鎖</strong>。</p>
-      </div>
+
+      <h3>用 semaphore 排順序（S1 做完才做 S2）</h3>
+      <pre class="pseudo"><code>semaphore synch = 0            // 一開始鎖住
+
+// P1
+S1
+signal(synch)                  // S1 做完才開放
+
+// P2
+wait(synch)                    // 等 P1 的 signal
+S2</code></pre>
+
+      <h3>Monitor 的結構</h3>
+      <pre class="pseudo"><code>MONITOR monitor_name
+    // 成員變數（共用資料），只能被下面的 method 存取
+    condition x, y             // condition variable
+
+    FUNCTION p1(...)
+        ...
+        IF 條件不成立 THEN
+            x.wait()           // 暫停，進 x 的 queue
+        END IF
+        ...
+    END FUNCTION
+
+    FUNCTION p2(...)
+        ...
+        x.signal()             // 叫醒 x queue 裡的一個人，沒人就什麼都不做
+    END FUNCTION
+
+    FUNCTION initialization_code(...)
+        ...                    // 設定成員變數的初始值
+    END FUNCTION
+END MONITOR
+// 同一時間只有一個 process 能在 monitor 的任何 method 裡執行</code></pre>
 
       <h2 id="comparison">比較整理</h2>
       <div class="table-wrap">
@@ -380,6 +552,18 @@ END WHILE</code></pre>
             <tr><td>Mutex lock</td><td>作業系統</td><td>課本版本 busy waiting（spinlock），函式庫實作常會睡覺</td><td>介面簡單，不用接觸硬體指令</td><td>spin 太久浪費 CPU</td><td>一般的互斥需求、短的 critical section</td></tr>
             <tr><td>Binary semaphore</td><td>作業系統</td><td>block</td><td>和 mutex 類似，也能做順序控制</td><td>沒有「誰鎖誰解」的擁有者概念，容易用錯</td><td>互斥、兩個 thread 之間的先後順序</td></tr>
             <tr><td>Counting semaphore</td><td>作業系統</td><td>block</td><td>可以管理 N 份資源</td><td>wait/signal 順序寫錯就 deadlock，難除錯</td><td>連線池、bounded buffer</td></tr>
+            <tr><td>Monitor</td><td>程式語言</td><td>block（在 entry queue 或 CV 的 queue 等）</td><td>互斥由語言自動處理，不容易用錯；CV 能精準控制誰等誰醒</td><td>需要語言支援，signal 之後誰先跑要看實作（Hoare 或 Mesa）</td><td>Java 的 synchronized、需要好幾種等待條件的情況</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>兩種 liveness 問題的比較：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>問題</th><th>發生原因</th><th>結果</th><th>解法</th></tr></thead>
+          <tbody>
+            <tr><td>Deadlock</td><td>兩個以上的 process 互相等對方手上的資源，形成循環等待</td><td>大家都永遠等下去</td><td>例如所有人用同樣的順序拿資源（第 08 章 Deadlocks 會詳細介紹）</td></tr>
+            <tr><td>Priority inversion</td><td>高優先權的 H 等低優先權的 L 釋放資源，L 又被中優先權的 M 搶走</td><td>H 被 M 間接拖住</td><td>priority-inheritance protocol</td></tr>
           </tbody>
         </table>
       </div>
@@ -396,31 +580,48 @@ END WHILE</code></pre>
         <p><strong>原因：</strong>counting semaphore 的初始值就是資源數量。每個 wait 減一：3 → 2 → 1 → 0 → −1 → −2。前 3 個人拿到印表機，第 4、5 個人在等，負數的絕對值 2 剛好就是等待人數。</p>
       </details>
       <details class="quiz">
-        <summary>Q3. 在 bounded buffer 裡，如果 consumer 寫成先 <code>wait(mutex)</code> 再 <code>wait(full)</code>，什麼情況下會出事？</summary>
-        <p><strong>答案：</strong>buffer 是空的時候會 deadlock。</p>
-        <p><strong>原因：</strong>consumer 拿著 mutex 去等 full，但 producer 要放東西進 buffer 之前也要先拿 mutex，拿不到就放不進去，full 永遠不會增加。兩邊互相等對方手上的東西，就是 deadlock。和 producer 的情況是對稱的。</p>
-      </details>
-      <details class="quiz">
-        <summary>Q4. 為什麼在單核 CPU 上用 spinlock 通常是壞主意？</summary>
+        <summary>Q3. 為什麼在單核 CPU 上用 spinlock 通常是壞主意？</summary>
         <p><strong>答案：</strong>因為空轉的 thread 佔著唯一的 CPU，拿著鎖的 thread 沒辦法執行去釋放鎖。</p>
         <p><strong>原因：</strong>spinlock 的前提是「拿著鎖的人正在別的核心上跑，很快就會放開」。單核時拿著鎖的人一定不在跑，等的人只能空轉到自己的 time slice 用完，被切換走之後持有者才有機會執行，完全是浪費。這時候用會讓出 CPU 的 mutex 比較好。</p>
       </details>
 
       <details class="quiz">
-        <summary>Q5. 為什麼「暫時關掉 interrupt」可以在單核心上保護 kernel 的 next_available_pid，在多核心上卻不行？</summary>
+        <summary>Q4. 為什麼「暫時關掉 interrupt」可以在單核心上保護 kernel 的 next_available_pid，在多核心上卻不行？</summary>
         <p><strong>答案：</strong>關中斷只能讓自己這顆 CPU 不被打斷，其他 CPU 本來就在同時執行，還是能存取同一個變數。</p>
         <p><strong>原因：</strong>單核心上，別的 process 要執行一定要先透過中斷把 CPU 搶走，關掉中斷就沒人能插進來。多核心上兩個 process 可以真的同時在兩顆 CPU 上跑，根本不需要打斷你，所以要用 CAS 或 mutex 這類能跨核心的同步工具。</p>
       </details>
       <details class="quiz">
-        <summary>Q6. 用 compare_and_swap 實作的 increment() 裡，為什麼要用 do-while 迴圈？</summary>
+        <summary>Q5. 用 compare_and_swap 實作的 increment() 裡，為什麼要用 do-while 迴圈？</summary>
         <p><strong>答案：</strong>因為讀出舊值和 CAS 之間，別的 thread 可能已經改過這個變數，這時 CAS 會失敗，必須重讀再試。</p>
         <p><strong>原因：</strong>CAS 只有在「目前的值還等於我剛剛讀到的 temp」時才會寫入 temp + 1，並回傳原本的值。回傳值不等於 temp 代表被別人搶先改了，這次的加一沒有成功，所以用迴圈一直試到成功為止，保證每一次加一都不會被蓋掉。</p>
       </details>
 
+      <details class="quiz">
+        <summary>Q6. 想讓 P2 的 S2 一定在 P1 的 S1 之後執行，semaphore synch 的初始值要設成多少？如果設成 1 會怎樣？</summary>
+        <p><strong>答案：</strong>設成 0。設成 1 的話，P2 可能在 S1 還沒做完前就執行 S2。</p>
+        <p><strong>原因：</strong>初始值 0 代表一開始就鎖住，P2 跑到 wait(synch) 時一定要等 P1 做完 S1、呼叫 signal(synch) 才能繼續。如果初始值是 1，P2 一開始 wait 就能把 1 減成 0 直接通過，順序就沒有保證了。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q7. Monitor 裡的 condition variable 呼叫 x.signal() 時，如果 x 的 queue 沒有人在等，會發生什麼事？這和 semaphore 的 signal 有什麼不同？</summary>
+        <p><strong>答案：</strong>什麼事都不會發生。semaphore 的 signal 則一定會把計數器加一。</p>
+        <p><strong>原因：</strong>condition variable 沒有計數器，只有一條 queue，signal 只能叫醒已經在 queue 裡的人，沒人在等就直接消失。semaphore 的 signal 會留下記錄，之後才來 wait 的人可以直接用掉這次 signal，不用等待。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q8. P 在 monitor 裡呼叫 x.signal() 叫醒了 Q。在 Hoare 和 Mesa 兩種做法下，接下來分別是誰在執行？</summary>
+        <p><strong>答案：</strong>Hoare（signal and wait）是 Q 先執行，P 等待；Mesa（signal and continue）是 P 繼續執行，Q 等待。</p>
+        <p><strong>原因：</strong>monitor 同一時間只能有一個 process 活動，P 和 Q 只能有一個繼續。Hoare 讓被叫醒的 Q 馬上執行，P 要等 Q 離開 monitor 或去等另一個條件；Mesa 讓 P 做完自己的事，Q 要等 P 離開或去等另一個條件。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q9. 優先權 H &gt; M &gt; L，L 拿著 H 需要的 semaphore 時，M 變成 runnable。為什麼說 H 被「反轉」了？priority inheritance 怎麼解決？</summary>
+        <p><strong>答案：</strong>因為 M 搶走 L 的 CPU，L 沒辦法釋放資源，H 就變成要等比自己低優先權的 M 跑完。priority inheritance 讓 L 暫時繼承 H 的優先權，M 就搶不走 L。</p>
+        <p><strong>原因：</strong>H 本來只需要等 L 用完資源，但 M 的出現讓 L 停下來，H 的等待時間多了一整段 M 的執行時間，而 M 根本不需要這個資源。L 繼承 H 的優先權後會比 M 優先，可以盡快用完並釋放 S，之後再放掉繼承來的優先權，H 就能接著執行。</p>
+      </details>
+
       <h2 id="reading">延伸閱讀</h2>
       <ul>
-        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter 6 Synchronization Tools（Section 6.1 至 6.5），semaphore 在 Section 6.6</li>
-        <li>上課投影片：06-07_OS_Synchronization_Tools &amp; Synchronization_Examples-1</li>
+        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter 6 Synchronization Tools（Section 6.1 至 6.8：semaphore 在 6.6、monitor 在 6.7、liveness 在 6.8）</li>
+        <li>上課投影片：06-07_OS_Synchronization_Tools &amp; Synchronization_Examples-1、06-07_OS_Synchronization_Tools &amp; Synchronization_Examples-2（p.1 至 p.11、p.21 至 p.27、p.39 至 p.41）</li>
+        <li>筆記：這一章還沒有筆記</li>
       </ul>
 
       <nav class="pager" id="pager"></nav>
