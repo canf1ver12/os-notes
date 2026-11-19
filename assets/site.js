@@ -71,6 +71,15 @@ const CHAPTERS = [
     icon: "table",
     summary: "用 semaphore 和 monitor 解三個經典問題：生產者消費者、讀者寫者、哲學家用餐。",
     tags: ["bounded buffer", "readers-writers", "dining philosophers", "POSIX semaphore"]
+  },
+  {
+    slug: "08-deadlocks",
+    no: "08",
+    title: "死結",
+    en: "Deadlocks",
+    icon: "cycle",
+    summary: "大家都在等對方放手怎麼辦？四個必要條件、RAG、銀行家演算法與偵測復原。",
+    tags: ["deadlock", "resource allocation graph", "banker's algorithm", "safe state", "wait-for graph"]
   }
 ];
 
@@ -117,6 +126,11 @@ const ICONS = {
     <circle cx="24.4" cy="42.5" r="4"/>
     <circle cx="19.6" cy="28.0" r="4"/>
     <path d="M37.3 24.7L42.6 17.4M40.6 34.8L49.1 37.6M32.0 41.0L32.0 50.0M23.4 34.8L14.9 37.6M26.7 24.7L21.4 17.4"/>`,
+  cycle: `
+    <path d="M15.1 25.8A18 18 0 0 1 46.7 21.7"/>
+    <path d="M46.7 15.7L46.7 21.7L41.1 19.7"/>
+    <path d="M48.9 38.2A18 18 0 0 1 17.3 42.3"/>
+    <path d="M17.3 48.3L17.3 42.3L22.9 44.3"/>`,
   sparkle: `<path class="fill" d="M32 4C33.6 25 39 30.4 60 32 39 33.6 33.6 39 32 60 30.4 39 25 33.6 4 32 25 30.4 30.4 25 32 4z"/>`
 };
 

@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>08 死結 Deadlocks｜OS 課程筆記</title>
+  <link rel="stylesheet" href="../assets/fonts/fonts.css">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root=".." data-chapter="08-deadlocks">
+  <header class="site-header">
+    <a class="brand" href="../index.html">OS notes</a>
+    <button class="menu-btn" id="menu-btn" type="button">章節</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="content">
+      <header class="chapter-head">
+        <p class="eyebrow">CHAPTER 08</p>
+        <h1>死結</h1>
+        <p class="en">Deadlocks</p>
+      </header>
+
+      <h2 id="key-points">本章重點</h2>
+      <div class="summary-box">
+        <ul>
+          <li>Deadlock（死結）是一群 thread 都在等「只有這群裡的另一個 thread 才能觸發」的事件，四個必要條件 mutual exclusion、hold and wait、no preemption、circular wait 同時成立才會發生。</li>
+          <li>用 resource-allocation graph（資源配置圖）來看：沒有 cycle 就一定沒有 deadlock；有 cycle 時，每種資源只有一個 instance 就一定 deadlock，有好幾個 instance 只是「可能」deadlock。</li>
+          <li>處理方式分四類：直接忽略（Linux、Windows 都這樣做）、prevention 事先防範（破壞其中一個條件）、avoidance 邊走邊看邊閃（只在配置後仍是 safe state 時才答應）、detection 加 recovery（讓它發生，再偵測和復原）。</li>
+          <li>Banker's algorithm（銀行家演算法）用 Need = Max − Allocation 找 safe sequence，用來處理每種資源有好幾個 instance 的 avoidance。</li>
+          <li>Detection 在單一 instance 時找 wait-for graph 的 cycle，好幾個 instance 時用和 safety algorithm 很像的偵測演算法，只是把 Need 換成目前的 Request；發現後用終止 process 或搶資源來復原。</li>
+        </ul>
+      </div>
+
+      <h2 id="concepts">核心觀念</h2>
+
+      <h3>Deadlock 的定義</h3>
+      <p>一組 thread 處於 <strong>deadlock</strong>（死結）狀態，是指這組裡的<strong>每一個</strong> thread 都在等一個事件，而這個事件只有這組裡的<strong>另一個</strong> thread 才能觸發。這裡的「事件」主要是資源的取得和釋放。</p>
+      <p>生活例子：一條只容得下一台車的窄橋，兩台車從兩頭同時開上來，在中間對上了。兩台車都要對方先倒車才能過，但兩台都在等對方，誰也不動，就卡死了。</p>
+      <p>第 06 章的 liveness 已經看過最小的例子：P0 先 <code>wait(S)</code> 再 <code>wait(Q)</code>，P1 先 <code>wait(Q)</code> 再 <code>wait(S)</code>，兩邊各拿一個再等對方，就 deadlock 了。這章把它當成一個完整的問題來處理。</p>
+
+      <h3>System model：資源怎麼被使用</h3>
+      <ul>
+        <li>系統裡有好幾種資源 <strong>resource type</strong> R1、R2、…、Rm，例如 CPU cycle、記憶體空間、I/O 裝置。</li>
+        <li>每種資源 Ri 有 Wi 個 <strong>instance</strong>。例如系統有 4 顆 CPU，CPU 這種資源就有 4 個 instance。</li>
+      </ul>
+      <p>正常情況下，thread 用資源一定照這個順序：</p>
+      <ol>
+        <li><strong>Request</strong>：要求資源。如果沒辦法馬上給，thread 就要等，例如要的 mutex 正被別的 thread 拿著。</li>
+        <li><strong>Use</strong>：使用資源，例如拿到 mutex 之後進入 critical section。</li>
+        <li><strong>Release</strong>：用完釋放資源。</li>
+      </ol>
+
+      <h3>四個必要條件</h3>
+      <p>下面四個條件<strong>同時成立</strong>才會有 deadlock。反過來說，只要破壞其中任何一個，就不會 deadlock。</p>
+      <dl class="terms">
+        <dt>Mutual exclusion（互斥）</dt>
+        <dd>資源同一時間只能給一個人用。</dd>
+        <dt>Hold and wait（持有並等待）</dt>
+        <dd>有人手上拿著一些資源，同時又在等別的資源。</dd>
+        <dt>No preemption（不可搶奪）</dt>
+        <dd>資源只能由拿著它的 process 做完工作後自願釋放，別人不能搶走。</dd>
+        <dt>Circular wait（循環等待）</dt>
+        <dd>存在一組 {T0, T1, …, Tn}：T0 在等 T1 手上的資源、T1 在等 T2 手上的資源、…、Tn 在等 T0 手上的資源，繞成一圈。</dd>
+      </dl>
+      <p>用窄橋的例子對照：橋上一段路只能有一台車（mutual exclusion）；兩台車都佔著自己那半座橋又要對方那半（hold and wait）；不能用吊車把車吊走（no preemption）；A 等 B、B 等 A（circular wait）。</p>
+
+      <h3>Resource-allocation graph</h3>
+      <p><strong>Resource-allocation graph</strong>（資源配置圖，簡稱 RAG）用一張有向圖描述現在誰拿著什麼、誰在等什麼。點有兩種：</p>
+      <ul>
+        <li><strong>T</strong> = {T1, T2, …, Tn}：系統裡所有的 thread，畫成圓圈。</li>
+        <li><strong>R</strong> = {R1, R2, …, Rm}：系統裡所有的資源種類，畫成方框，方框裡的點代表有幾個 instance。</li>
+      </ul>
+      <p>邊也有兩種：</p>
+      <dl class="terms">
+        <dt>Request edge：Ti → Rj</dt>
+        <dd>Ti 要求了 Rj 的一個 instance，正在等。</dd>
+        <dt>Assignment edge：Rj → Ti</dt>
+        <dd>Rj 的一個 instance 已經配給 Ti，Ti 正拿著它。</dd>
+      </dl>
+      <p>從圖上判斷的基本規則：</p>
+      <ul>
+        <li><strong>沒有 cycle</strong>：一定沒有 deadlock，因為 circular wait 不可能成立。</li>
+        <li><strong>有 cycle，而且每種資源只有一個 instance</strong>：一定 deadlock。</li>
+        <li><strong>有 cycle，但資源有好幾個 instance</strong>：只是「可能」deadlock，要再看下去。</li>
+      </ul>
+      <div class="callout tip">
+        <strong>記憶技巧</strong>
+        <p>看圖的觀察重點：先找出有在等資源的 thread，再一個一個評估它「有沒有可能等到」。如果有某個 thread 沒在等任何東西，它做完就會釋放資源，等它的人就有機會等到。全部的人都在等這群裡的其他人，才是 deadlock。</p>
+      </div>
+
+      <h3>處理 deadlock 的四種方式</h3>
+      <ul>
+        <li><strong>直接忽略</strong>：假裝 deadlock 不會發生。這是包括 Linux 和 Windows 在內大多數作業系統的做法，因為 deadlock 不常發生，而預防或偵測的成本很高，真的卡住就交給開發者或使用者處理。</li>
+        <li><strong>Deadlock prevention</strong>（預防）：事先防範，保證四個必要條件裡至少有一個不會成立。</li>
+        <li><strong>Deadlock avoidance</strong>（避免）：邊走邊看邊閃，每次配置資源前動態檢查配置後的狀態，可能出事就不給。</li>
+        <li><strong>Deadlock detection 加 recovery</strong>（偵測與復原）：允許 deadlock 發生，之後偵測出來再復原。</li>
+      </ul>
+
+      <h3>Deadlock prevention：破壞四個條件</h3>
+      <p>想法很直接：四個條件少一個就不會 deadlock，那就從制度上讓其中一個不可能成立。</p>
+      <ul>
+        <li><strong>破壞 mutual exclusion</strong>：把資源改成可以共用，例如唯讀的檔案可以讓很多人同時讀。但不是每種資源都辦得到，像 mutex lock 本來就不能讓好幾個 thread 同時拿著，所以這條通常破不了。</li>
+        <li><strong>破壞 hold and wait</strong>：保證 thread 要資源的時候手上沒有拿著其他資源。有兩種協定：
+          <ul>
+            <li>協定一：開始執行前先一次要齊所有資源。</li>
+            <li>協定二：手上沒有資源時才能要，想要新的就要先把手上的全部放掉。</li>
+          </ul>
+          兩種都會讓<strong>資源使用率很低</strong>（很早拿到卻很晚才用），也可能 <strong>starvation</strong>（需要很多熱門資源的人一直湊不齊）。</li>
+        <li><strong>破壞 no preemption</strong>：一個 process 在等資源時，它手上已經拿著的資源隨時可以被搶走。例如 T2 拿著 R1、在等 R2，那 R1 就可以被搶過來配給在等 R1 的 T1。這只適合狀態容易保存和還原的資源，例如 CPU register 和記憶體；印表機、磁帶機這種實體資源，印到一半被搶走就沒辦法接著印，不適用。</li>
+        <li><strong>破壞 circular wait</strong>：規定所有人只能照固定的順序要資源，見下一段。這是四個裡面最實用的一個。</li>
+      </ul>
+
+      <h3>破壞 circular wait：資源排序</h3>
+      <p>做法是幫所有資源種類 R = {R0, R1, …, RN} 編一個全域的順序，用函數 F(x) 表示資源 x 的順序號碼，規定每個 thread 只能照 F <strong>由小到大</strong>要資源：如果 Tk 已經要過 Ri，現在想要 Rj，那一定要 F(Ri) &lt; F(Rj)。</p>
+      <p>例子：F(SSD) = 1、F(HDD) = 5、F(printer) = 12，程式裡要資源的順序就只能是 SSD → HDD → printer，不能先拿印表機再回頭要 SSD。</p>
+      <p>為什麼這樣就不會有 circular wait？用反證法，先假設 circular wait 成立：T0 等 T1 手上的 R0、T1 等 T2 手上的 R1、…、Tn 等 T0 手上的 Rn。</p>
+      <ul>
+        <li>T1 拿著 R0 又在要 R1，依規定 F(R0) &lt; F(R1)。</li>
+        <li>同理一路推下去：F(R0) &lt; F(R1) &lt; … &lt; F(Rn)。</li>
+        <li>但 T0 拿著 Rn 又在要 R0，所以 F(Rn) &lt; F(R0)。</li>
+        <li>合起來得到 F(R0) &lt; F(R0)，不可能，所以 circular wait 不會成立。</li>
+      </ul>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>投影片的課後閱讀問到：如果鎖是在執行時動態取得的（例如依參數決定要鎖哪兩個帳戶），為什麼排好順序也不保證能預防 deadlock？可以讀課本 P.353 至 P.354 的說明。</p>
+      </div>
+
+      <h3>Deadlock avoidance 和 prevention 的差別</h3>
+      <ul>
+        <li><strong>Prevention</strong>：限制「要資源的方式」，例如只能照順序要、一次要齊。不管現在狀況如何，規則都一樣。</li>
+        <li><strong>Avoidance</strong>：需要額外資訊，知道每個 thread 未來最多會怎麼要資源；每次有人要資源時，先模擬給了之後會不會有危險，覺得可能 deadlock 就拒絕這次請求。</li>
+      </ul>
+      <p>avoidance 依資源的 instance 數有兩種做法：</p>
+      <ul>
+        <li><strong>每種資源只有一個 instance</strong>：用 resource-allocation graph algorithm，檢查會不會形成 cycle。</li>
+        <li><strong>每種資源有好幾個 instance</strong>：用 banker's algorithm，檢查是否存在 safe sequence。</li>
+      </ul>
+
+      <h3>Safe state</h3>
+      <p>系統處於 <strong>safe state</strong>（安全狀態），是指存在至少一種資源配置的次序，可以滿足所有 thread 的需求。這個次序叫做 <strong>safe sequence</strong>。</p>
+      <p>正式一點：存在一個次序 &lt;T1, T2, …, Tn&gt;，對其中每一個 Ti，它還需要的資源都能用「現在沒人用的資源」加上「排在它前面的 Tj（j &lt; i）做完後釋放的資源」來滿足。前者是現在就能滿足，後者是未來可以滿足。</p>
+      <ul>
+        <li>不在 safe state，就叫 <strong>unsafe state</strong>。</li>
+        <li><strong>Deadlock 一定在 unsafe state 裡</strong>，但在 unsafe state 不一定會 deadlock，因為 thread 不一定真的會要到 Max 那麼多。</li>
+        <li>只要一直待在 safe state，就一定不會 deadlock。所以 avoidance 的規則是：<strong>只有配置後系統仍在 safe state，才答應這次請求</strong>。</li>
+      </ul>
+      <p>生活例子：銀行手上的現金不夠一次借給所有客戶，但只要能排出一個順序，讓每個客戶依序借到他宣告的上限、還錢之後再借給下一個，銀行就是安全的。</p>
+
+      <h3>Resource-allocation graph algorithm</h3>
+      <p>給每種資源只有一個 instance 的系統用。在 RAG 上多加一種邊：</p>
+      <dl class="terms">
+        <dt>Claim edge：Ti - - &gt; Rj（虛線）</dt>
+        <dd>Ti 未來<strong>可能</strong>會要求 Rj。每個 thread 開始執行前，就要把所有 claim edge 先畫好。</dd>
+      </dl>
+      <ul>
+        <li>Ti 真的要求 Rj 時，claim edge 變成 request edge。</li>
+        <li>Ti 釋放 Rj 時，assignment edge 變回 claim edge。</li>
+        <li>只有在「把這條 request edge 轉成 assignment edge 之後，圖上不會出現 cycle」時，才答應這次請求。直覺意義是：如果未來 R 配給 T 之後會形成 cycle，現在就不給。</li>
+      </ul>
+      <p>它的限制：</p>
+      <ul>
+        <li>只能用在每種資源只有一個 instance 的情況。</li>
+        <li>資源需求要事先宣告（claim edge 要先畫好），不能臨時多要。</li>
+        <li>用 RAG 檢查 cycle 的時間是 O(n²)，n 是系統裡的 thread 數。</li>
+      </ul>
+
+      <h3>Banker's algorithm</h3>
+      <p>資源有好幾個 instance 時，cycle 不代表一定 deadlock，就改用 <strong>banker's algorithm</strong>（銀行家演算法）。它是一個通用的安全檢查：每次配置之前，先模擬配置後還找不找得到 safe sequence，找得到才真的配置。</p>
+      <p>設 n 是 process 數、m 是資源種類數，需要四個資料結構：</p>
+      <dl class="terms">
+        <dt>Available（長度 m 的向量）</dt>
+        <dd>Available[j] = k 代表資源 Rj 現在還有 k 個 instance 可以用。</dd>
+        <dt>Max（n × m 矩陣）</dt>
+        <dd>Max[i][j] = k 代表 Pi 最多會要 k 個 Rj，要事先宣告。</dd>
+        <dt>Allocation（n × m 矩陣）</dt>
+        <dd>Allocation[i][j] = k 代表 Pi 現在拿著 k 個 Rj。</dd>
+        <dt>Need（n × m 矩陣）</dt>
+        <dd>Need[i][j] = k 代表 Pi 還可能需要 k 個 Rj 才能做完。<strong>Need = Max − Allocation</strong>。</dd>
+      </dl>
+      <p>它由兩個部分組成：</p>
+      <ul>
+        <li><strong>Safety algorithm</strong>：判斷目前狀態是不是 safe。假設每個 process 都會要到 Max，找一個用現有資源就能滿足 Need 的 process，讓它做完並歸還資源，再回去找下一個，直到全部滿足（safe）或找不到人（unsafe）。</li>
+        <li><strong>Resource-request algorithm</strong>：Pi 送出請求 Request_i 時，先檢查不能超過自己宣告的 Need、也不能超過 Available，再<strong>假裝</strong>配置下去並跑 safety algorithm。safe 就真的配置；unsafe 就讓 Pi 等，並把狀態還原。</li>
+      </ul>
+      <p>為什麼叫銀行家？銀行不會把錢借到「就算所有客戶都照上限來借，也沒辦法依某個順序全部滿足」的程度。</p>
+
+      <h3>Deadlock detection：單一 instance</h3>
+      <p>如果不做 prevention 也不做 avoidance，就要能偵測 deadlock。每種資源只有一個 instance 時，把 RAG 簡化成 <strong>wait-for graph</strong>（等待圖）：</p>
+      <ul>
+        <li>點只剩 process，把資源的點拿掉。</li>
+        <li>Pi → Pj 代表 Pi 在等 Pj 手上的資源（原本是 Pi → R → Pj 兩條邊）。</li>
+        <li>定期呼叫演算法在圖上找 cycle，<strong>有 cycle 就有 deadlock</strong>。</li>
+      </ul>
+
+      <h3>Deadlock detection：好幾個 instance</h3>
+      <p>資源有好幾個 instance 時，用和 safety algorithm 很像的偵測演算法，資料結構有 Available、Allocation，以及：</p>
+      <dl class="terms">
+        <dt>Request（n × m 矩陣）</dt>
+        <dd>Request[i][j] = k 代表 Pi <strong>現在</strong>正在要求 k 個 Rj。</dd>
+      </dl>
+      <p>和 safety algorithm 的兩個差別：</p>
+      <ul>
+        <li>比的是 <strong>Request</strong>（現在真的在要的），不是 Need（未來最多可能要的）。偵測只關心「現在是不是已經卡死」，所以樂觀地假設拿到這次要的東西就能做完。</li>
+        <li>一開始手上沒有任何資源（Allocation 全是 0）的 process，Finish 直接設成 true，因為它不可能卡住別人。</li>
+      </ul>
+      <p>最後 Finish[i] 還是 false 的 Pi，就是陷入 deadlock 的 process。</p>
+
+      <h3>Deadlock recovery</h3>
+      <p>偵測到 deadlock 之後，有兩類復原方法：</p>
+      <ul>
+        <li><strong>Process termination</strong>（終止 process）：
+          <ul>
+            <li>把所有 deadlock 的 process 全部終止：一定能解開，但代價大，大家做到一半的工作都白費。</li>
+            <li>一次終止一個，直到 cycle 解開：每殺一個都要重跑一次偵測，而且要決定先殺誰，原則是挑代價最小的。</li>
+          </ul>
+        </li>
+        <li><strong>Resource preemption</strong>（搶資源）：
+          <ul>
+            <li><strong>選 victim</strong>：要搶誰的資源？要考慮的因素很多，見課本 P.366 至 P.367。</li>
+            <li><strong>Rollback</strong>：被搶的 process 要退回某個安全的狀態，再從那裡重新開始。可以只退一部分（partial rollback），也可以整個重來（total rollback）。</li>
+            <li><strong>Starvation</strong>：要確保不會一直挑同一個 process 當 victim，例如把被 rollback 的次數也算進代價裡。</li>
+          </ul>
+        </li>
+      </ul>
+
+      <h2 id="example">實際例子</h2>
+
+      <h3>看 resource-allocation graph 判斷 deadlock</h3>
+      <p>投影片上的系統：R1 有 1 個 instance、R2 有 2 個、R3 有 1 個、R4 有 3 個。邊的集合是 E = {T1 → R1, T2 → R3, R1 → T2, R2 → T2, R2 → T1, R3 → T3}，也就是：</p>
+      <ul>
+        <li>T1 拿著一個 R2，在等 R1。</li>
+        <li>T2 拿著 R1 和一個 R2，在等 R3。</li>
+        <li>T3 拿著 R3。</li>
+      </ul>
+      <p>這時候圖上沒有 cycle，T3 沒在等任何東西，做完就會放掉 R3，T2 接著拿到 R3，再放掉 R1 給 T1，所以<strong>沒有 deadlock</strong>。</p>
+      <p><strong>Case 1：T3 再要求一個 R2</strong>（下圖虛線）：</p>
+      <pre class="diagram"> T1 ──request──▶ R1 [●] ──assign──▶ T2 ──request──▶ R3 [●] ──assign──▶ T3
+ ▲                                  ▲                                  ┊
+ │                                  │                                  ┊ Case 1
+ └──assign──── R2 [● ●] ───assign───┘                                  ┊ request
+                ▲                                                      ┊
+                └┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┘
+
+ R4 [● ● ●]</pre>
+      <p>出現兩個最小的 cycle：</p>
+      <ul>
+        <li>T1 → R1 → T2 → R3 → T3 → R2 → T1</li>
+        <li>T2 → R3 → T3 → R2 → T2</li>
+      </ul>
+      <p>R2 雖然有 2 個 instance，但兩個都被 T1、T2 拿著，而 T1 在等 T2、T2 在等 T3、T3 在等 T1 或 T2 放掉 R2。三個 thread 都在等這群裡的其他人，<strong>deadlock</strong>。</p>
+      <p><strong>Case 2：另一張圖</strong>，R1、R2 各有 2 個 instance：</p>
+      <pre class="diagram"> T2 ◀──assign── R1 [● ●] ◀──request── T1
+                 │                    ▲
+                 │ assign             │ assign
+                 ▼                    │
+                T3 ──request───────▶ R2 [● ●] ──assign──▶ T4</pre>
+      <p>圖上有 cycle：T1 → R1 → T3 → R2 → T1。但是 T2 和 T4 沒有在等任何東西：</p>
+      <ul>
+        <li>T4 做完會釋放它的 R2，T3 就能拿到 R2。</li>
+        <li>T2 做完會釋放它的 R1，T1 就能拿到 R1。</li>
+      </ul>
+      <p>所以有 cycle 但<strong>沒有 deadlock</strong>。這就是「資源有好幾個 instance 時，cycle 只代表可能 deadlock」的意思。</p>
+
+      <h3>兩把 mutex 的 deadlock 與 wait-for graph</h3>
+      <p>T1 先拿 first_mutex 再拿 second_mutex；T2 反過來，先拿 second_mutex 再拿 first_mutex。如果 T1 拿到 first_mutex、T2 拿到 second_mutex，兩邊就會互相等：</p>
+      <pre class="diagram"> T1 ──request──▶ second_mutex ──assign──▶ T2
+ ▲                                         │
+ └──assign─── first_mutex ◀──request───────┘
+
+ wait-for graph：T1 ──▶ T2 ──▶ T1</pre>
+      <p>兩把 mutex 都只有一個 instance，把資源的點拿掉，就得到 wait-for graph：T1 在等 T2、T2 在等 T1，有 cycle，所以 deadlock。</p>
+      <p>修正方法就是資源排序：讓 T2 也改成先要 first_mutex 再要 second_mutex。這樣 T1、T2 只會有一個人先搶到 first_mutex，另一個在第一步就等，不會拿著東西等。</p>
+      <pre class="lang-c"><code>#include &lt;stdio.h&gt;
+#include &lt;pthread.h&gt;
+#include &lt;unistd.h&gt;
+
+pthread_mutex_t first_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t second_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void *do_work_one(void *arg) {
+    pthread_mutex_lock(&amp;first_mutex);
+    printf(&quot;thread one got first_mutex\n&quot;);
+    sleep(1);                              // 故意停一下，讓 thread two 拿到 second_mutex
+    pthread_mutex_lock(&amp;second_mutex);
+    printf(&quot;thread one got second_mutex\n&quot;);
+    pthread_mutex_unlock(&amp;second_mutex);
+    pthread_mutex_unlock(&amp;first_mutex);
+    return NULL;
+}
+
+void *do_work_two(void *arg) {
+    pthread_mutex_lock(&amp;second_mutex);     // 順序和 thread one 相反
+    printf(&quot;thread two got second_mutex\n&quot;);
+    sleep(1);
+    pthread_mutex_lock(&amp;first_mutex);
+    printf(&quot;thread two got first_mutex\n&quot;);
+    pthread_mutex_unlock(&amp;first_mutex);
+    pthread_mutex_unlock(&amp;second_mutex);
+    return NULL;
+}
+
+int main(void) {
+    setvbuf(stdout, NULL, _IONBF, 0);      // 不緩衝，卡住前印的字才看得到
+    pthread_t t1, t2;
+    pthread_create(&amp;t1, NULL, do_work_one, NULL);
+    pthread_create(&amp;t2, NULL, do_work_two, NULL);
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+    printf(&quot;done\n&quot;);
+    return 0;
+}</code></pre>
+      <p>編譯：<code>gcc deadlock.c -o deadlock -pthread</code></p>
+      <p>預期輸出：印出下面兩行之後就卡住，永遠不會印 <code>done</code>，要按 Ctrl+C 結束。</p>
+      <pre class="diagram">thread one got first_mutex
+thread two got second_mutex</pre>
+      <p>把 <code>do_work_two</code> 改成先鎖 <code>first_mutex</code>、再鎖 <code>second_mutex</code> 之後，四行 <code>got</code> 都會印出來，最後印 <code>done</code>。哪個 thread 的兩行先印，要看誰先搶到 first_mutex，每次執行可能不同。</p>
+
+      <h3>Safe state：12 個資源</h3>
+      <p>系統共有 12 個同一種資源，在時間 t0 的狀態：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Thread</th><th class="num">Max needs</th><th class="num">Current holding</th><th class="num">還需要</th></tr></thead>
+          <tbody>
+            <tr><td>T0</td><td class="num">10</td><td class="num">5</td><td class="num">5</td></tr>
+            <tr><td>T1</td><td class="num">4</td><td class="num">2</td><td class="num">2</td></tr>
+            <tr><td>T2</td><td class="num">9</td><td class="num">2</td><td class="num">7</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>目前一共拿走 5 + 2 + 2 = 9 個，剩 12 − 9 = 3 個。照最壞情況（每個人都要到 Max）來檢查 &lt;T1, T0, T2&gt;：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">步驟</th><th>輪到</th><th class="num">做之前剩</th><th class="num">還需要</th><th class="num">給完剩</th><th class="num">做完歸還後剩</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>T1</td><td class="num">3</td><td class="num">2</td><td class="num">1</td><td class="num">1 + 4 = 5</td></tr>
+            <tr><td class="num">2</td><td>T0</td><td class="num">5</td><td class="num">5</td><td class="num">0</td><td class="num">0 + 10 = 10</td></tr>
+            <tr><td class="num">3</td><td>T2</td><td class="num">10</td><td class="num">7</td><td class="num">3</td><td class="num">3 + 9 = 12</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>每一步都給得起，所以 &lt;T1, T0, T2&gt; 是 safe sequence，系統在 safe state。</p>
+      <p><strong>如果在 t1 時，T2 再要 1 個而且系統給了</strong>：T2 拿著 3 個，總共拿走 5 + 2 + 3 = 10 個，剩 2 個。</p>
+      <ul>
+        <li>只有 T1 還需要的 2 個給得起。T1 做完歸還 4 個，剩 4 個。</li>
+        <li>T0 還需要 10 − 5 = 5 個，大於 4，給不起。</li>
+        <li>T2 還需要 9 − 3 = 6 個，大於 4，也給不起。</li>
+      </ul>
+      <p>兩條路都不通，找不到 safe sequence，這次配置會讓系統進入 unsafe state。所以 avoidance 不會答應 T2 這次的請求，T2 要先等。</p>
+
+      <h3>Banker's algorithm：安全檢查</h3>
+      <p>5 個 process、3 種資源，總數 A = 10、B = 5、C = 7。目前已用 A = 7、B = 2、C = 5，所以 Available = (3, 3, 2)。先算出 Need = Max − Allocation：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Process</th><th class="num">Max（A B C）</th><th class="num">Allocation（A B C）</th><th class="num">Need（A B C）</th></tr></thead>
+          <tbody>
+            <tr><td>P0</td><td class="num">7 5 3</td><td class="num">0 1 0</td><td class="num">7 4 3</td></tr>
+            <tr><td>P1</td><td class="num">3 2 2</td><td class="num">2 0 0</td><td class="num">1 2 2</td></tr>
+            <tr><td>P2</td><td class="num">9 0 2</td><td class="num">3 0 2</td><td class="num">6 0 0</td></tr>
+            <tr><td>P3</td><td class="num">2 2 2</td><td class="num">2 1 1</td><td class="num">0 1 1</td></tr>
+            <tr><td>P4</td><td class="num">4 3 3</td><td class="num">0 0 2</td><td class="num">4 3 1</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>從 Work = Available = (3, 3, 2) 開始，每次找一個 Need ≤ Work 的 process，讓它做完並把 Allocation 還回來：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">步驟</th><th>選誰</th><th class="num">Work（之前）</th><th class="num">Need</th><th class="num">歸還 Allocation</th><th class="num">Work（之後）</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>P1</td><td class="num">3 3 2</td><td class="num">1 2 2</td><td class="num">2 0 0</td><td class="num">5 3 2</td></tr>
+            <tr><td class="num">2</td><td>P3</td><td class="num">5 3 2</td><td class="num">0 1 1</td><td class="num">2 1 1</td><td class="num">7 4 3</td></tr>
+            <tr><td class="num">3</td><td>P4</td><td class="num">7 4 3</td><td class="num">4 3 1</td><td class="num">0 0 2</td><td class="num">7 4 5</td></tr>
+            <tr><td class="num">4</td><td>P2</td><td class="num">7 4 5</td><td class="num">6 0 0</td><td class="num">3 0 2</td><td class="num">10 4 7</td></tr>
+            <tr><td class="num">5</td><td>P0</td><td class="num">10 4 7</td><td class="num">7 4 3</td><td class="num">0 1 0</td><td class="num">10 5 7</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>全部的 process 都能做完，safe sequence 是 &lt;P1, P3, P4, P2, P0&gt;，系統在 safe state。最後的 Work 等於資源總數 (10, 5, 7)，可以拿來驗算。</p>
+      <div class="callout note">
+        <strong>補充</strong>
+        <p>safe sequence 不一定只有一種。例如第 3 步時 Work = (7, 4, 3)，P0 的 Need (7, 4, 3) 也剛好給得起，先選 P0 也可以。考試只要找到一組、而且每一步都驗算正確就是 safe。</p>
+      </div>
+
+      <h3>Banker's algorithm：處理請求</h3>
+      <p><strong>情況一：P1 請求 (1, 0, 2)</strong></p>
+      <ol>
+        <li>Request ≤ Need：(1, 0, 2) ≤ (1, 2, 2)，沒有超過宣告。</li>
+        <li>Request ≤ Available：(1, 0, 2) ≤ (3, 3, 2)，現在給得起。</li>
+        <li>假裝配置：Available 變成 (2, 3, 0)，P1 的 Allocation 變成 (3, 0, 2)，Need 變成 (0, 2, 0)。</li>
+        <li>跑 safety algorithm：</li>
+      </ol>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">步驟</th><th>選誰</th><th class="num">Work（之前）</th><th class="num">Need</th><th class="num">Work（之後）</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>P1</td><td class="num">2 3 0</td><td class="num">0 2 0</td><td class="num">5 3 2</td></tr>
+            <tr><td class="num">2</td><td>P3</td><td class="num">5 3 2</td><td class="num">0 1 1</td><td class="num">7 4 3</td></tr>
+            <tr><td class="num">3</td><td>P4</td><td class="num">7 4 3</td><td class="num">4 3 1</td><td class="num">7 4 5</td></tr>
+            <tr><td class="num">4</td><td>P0</td><td class="num">7 4 5</td><td class="num">7 4 3</td><td class="num">7 5 5</td></tr>
+            <tr><td class="num">5</td><td>P2</td><td class="num">7 5 5</td><td class="num">6 0 0</td><td class="num">10 5 7</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>找得到 safe sequence &lt;P1, P3, P4, P0, P2&gt;，進入另一個 safe state，所以<strong>答應</strong> P1 的請求。</p>
+      <p><strong>情況二：P4 請求 (3, 3, 0)</strong>（回到原本 Available = (3, 3, 2) 的狀態）</p>
+      <ol>
+        <li>Request ≤ Need：(3, 3, 0) ≤ (4, 3, 1)，沒問題。</li>
+        <li>Request ≤ Available：(3, 3, 0) ≤ (3, 3, 2)，給得起。</li>
+        <li>假裝配置：Available 變成 (0, 0, 2)，P4 的 Allocation 變成 (3, 3, 2)，Need 變成 (1, 0, 1)。</li>
+        <li>跑 safety algorithm：P0 要 (7, 4, 3)、P1 要 (1, 2, 2)、P2 要 (6, 0, 0)、P3 要 (0, 1, 1)、P4 要 (1, 0, 1)，每一個都至少有一項大於 (0, 0, 2)，一個都給不起。</li>
+      </ol>
+      <p>找不到 safe sequence，會進入 unsafe state，所以<strong>拒絕</strong>，P4 要等，狀態還原。注意這次請求在第 2 步明明「給得起」，但 banker's algorithm 還是不給，這就是 avoidance 和單純檢查有沒有庫存的差別。</p>
+
+      <h3>Deadlock detection：好幾個 instance</h3>
+      <p>5 個 process、3 種資源，總數 A = 7、B = 2、C = 6，而且 Available = (0, 0, 0)，資源全被拿走了：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Process</th><th class="num">Allocation（A B C）</th><th class="num">Request（A B C）</th></tr></thead>
+          <tbody>
+            <tr><td>P0</td><td class="num">0 1 0</td><td class="num">0 0 0</td></tr>
+            <tr><td>P1</td><td class="num">2 0 0</td><td class="num">2 0 2</td></tr>
+            <tr><td>P2</td><td class="num">3 0 3</td><td class="num">0 0 0</td></tr>
+            <tr><td>P3</td><td class="num">2 1 1</td><td class="num">1 0 0</td></tr>
+            <tr><td>P4</td><td class="num">0 0 2</td><td class="num">0 0 2</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>每個 process 都拿著資源，所以 Finish 一開始全是 false。從 Work = (0, 0, 0) 開始，找 Request ≤ Work 的 process：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">步驟</th><th>選誰</th><th class="num">Work（之前）</th><th class="num">Request</th><th class="num">Work（之後）</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>P0</td><td class="num">0 0 0</td><td class="num">0 0 0</td><td class="num">0 1 0</td></tr>
+            <tr><td class="num">2</td><td>P2</td><td class="num">0 1 0</td><td class="num">0 0 0</td><td class="num">3 1 3</td></tr>
+            <tr><td class="num">3</td><td>P3</td><td class="num">3 1 3</td><td class="num">1 0 0</td><td class="num">5 2 4</td></tr>
+            <tr><td class="num">4</td><td>P1</td><td class="num">5 2 4</td><td class="num">2 0 2</td><td class="num">7 2 4</td></tr>
+            <tr><td class="num">5</td><td>P4</td><td class="num">7 2 4</td><td class="num">0 0 2</td><td class="num">7 2 6</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>&lt;P0, P2, P3, P1, P4&gt; 全部都能完成，<strong>沒有 deadlock</strong>。</p>
+      <p><strong>如果 P2 多要求一個 C</strong>，Request(P2) 變成 (0, 0, 1)：</p>
+      <ul>
+        <li>P0 的 Request 是 (0, 0, 0)，可以完成，歸還後 Work = (0, 1, 0)。</li>
+        <li>P1 要 (2, 0, 2)、P2 要 (0, 0, 1)、P3 要 (1, 0, 0)、P4 要 (0, 0, 2)，A 和 C 都是 0，一個都滿足不了。</li>
+      </ul>
+      <p>能收回的只有 P0 那一個 B，不夠滿足其他人的請求，所以 <strong>P1、P2、P3、P4 陷入 deadlock</strong>。</p>
+
+      <h2 id="pseudocode">Pseudocode</h2>
+
+      <h3>Safety algorithm</h3>
+      <pre class="pseudo"><code>// n 個 process、m 種資源
+// need[i][j] = max[i][j] - allocation[i][j]
+FUNCTION is_safe(available, allocation, need)
+    work = copy(available)              // 長度 m
+    FOR i = 0 TO n - 1
+        finish[i] = false
+    END FOR
+
+    WHILE true
+        found = false
+        FOR i = 0 TO n - 1
+            IF finish[i] == false AND need[i] &lt;= work THEN   // 每一項都要 &lt;=
+                work = work + allocation[i]   // 假設 Pi 做完，歸還它拿著的資源
+                finish[i] = true
+                found = true
+            END IF
+        END FOR
+        IF found == false THEN
+            BREAK                          // 找不到任何人可以做完
+        END IF
+    END WHILE
+
+    IF finish[i] == true FOR ALL i THEN
+        RETURN true                        // safe state
+    END IF
+    RETURN false                           // unsafe state
+END FUNCTION</code></pre>
+
+      <h3>Resource-request algorithm</h3>
+      <pre class="pseudo"><code>// Pi 送出請求 request_i（長度 m）
+FUNCTION request_resources(i, request_i)
+    IF NOT (request_i &lt;= need[i]) THEN
+        RETURN error                       // 超過自己宣告的最大需求
+    END IF
+    IF NOT (request_i &lt;= available) THEN
+        block(Pi)                          // 資源不夠，Pi 必須等
+        RETURN
+    END IF
+
+    // 假裝配置下去
+    available     = available - request_i
+    allocation[i] = allocation[i] + request_i
+    need[i]       = need[i] - request_i
+
+    IF is_safe(available, allocation, need) THEN
+        RETURN granted                     // 真的配置給 Pi
+    ELSE
+        // 還原成配置前的狀態，Pi 必須等
+        available     = available + request_i
+        allocation[i] = allocation[i] - request_i
+        need[i]       = need[i] + request_i
+        block(Pi)
+    END IF
+END FUNCTION</code></pre>
+
+      <h3>Detection algorithm（好幾個 instance）</h3>
+      <pre class="pseudo"><code>FUNCTION detect_deadlock(available, allocation, request)
+    work = copy(available)
+    FOR i = 0 TO n - 1
+        IF allocation[i] != 0 THEN
+            finish[i] = false
+        ELSE
+            finish[i] = true               // 手上沒資源，不可能卡住別人
+        END IF
+    END FOR
+
+    WHILE EXISTS i WHERE finish[i] == false AND request[i] &lt;= work
+        work = work + allocation[i]        // 樂觀假設 Pi 拿到這次要的就能做完
+        finish[i] = true
+    END WHILE
+
+    deadlocked = []
+    FOR i = 0 TO n - 1
+        IF finish[i] == false THEN
+            deadlocked.add(Pi)             // Pi 陷入 deadlock
+        END IF
+    END FOR
+    RETURN deadlocked                      // 空的就代表沒有 deadlock
+END FUNCTION</code></pre>
+
+      <h3>用資源排序預防 circular wait</h3>
+      <pre class="pseudo"><code>// 每種資源有固定的順序號碼 F(r)，例如 F(first_mutex) = 1、F(second_mutex) = 2
+FUNCTION acquire_all(resources)
+    sort(resources, key = F)               // 依順序號碼由小到大排
+    FOR EACH r IN resources
+        acquire(r)                         // 一律照順序拿，不能回頭拿號碼小的
+    END FOR
+END FUNCTION
+
+// T1 和 T2 都照同一個順序
+acquire_all([first_mutex, second_mutex])
+// critical section
+release(second_mutex)
+release(first_mutex)</code></pre>
+
+      <h2 id="comparison">比較整理</h2>
+      <p>處理 deadlock 的四種方式：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>方式</th><th>做法</th><th>優點</th><th>缺點</th><th>適用情境</th></tr></thead>
+          <tbody>
+            <tr><td>直接忽略</td><td>當作不會發生</td><td>沒有額外成本</td><td>真的卡住只能人工處理</td><td>deadlock 很少發生的一般作業系統，例如 Linux、Windows</td></tr>
+            <tr><td>Prevention</td><td>事先防範，破壞四個必要條件之一</td><td>保證不會 deadlock，不用執行期檢查</td><td>資源使用率低、可能 starvation，有些條件破不了</td><td>能規定資源取得方式的情境，例如固定上鎖順序</td></tr>
+            <tr><td>Avoidance</td><td>邊走邊看邊閃，配置後仍是 safe state 才答應</td><td>比 prevention 有彈性，資源使用率較高</td><td>要事先知道最大需求，每次配置都要跑檢查</td><td>process 數和最大需求能事先宣告的系統</td></tr>
+            <tr><td>Detection + Recovery</td><td>允許發生，定期偵測，再終止 process 或搶資源</td><td>平常不限制要資源的方式</td><td>偵測有成本，復原會浪費做到一半的工作</td><td>deadlock 不常發生、但發生時要能自動處理的系統</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Prevention 破壞四個條件：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>破壞的條件</th><th>做法</th><th>問題</th></tr></thead>
+          <tbody>
+            <tr><td>Mutual exclusion</td><td>資源改成可共用，例如唯讀檔案</td><td>很多資源本質上不能共用，例如 mutex lock</td></tr>
+            <tr><td>Hold and wait</td><td>一次要齊所有資源，或手上沒有資源才能要</td><td>資源使用率低、可能 starvation</td></tr>
+            <tr><td>No preemption</td><td>在等資源的 process，手上的資源可以被搶走</td><td>只適用 CPU register、記憶體這類能保存和還原狀態的資源</td></tr>
+            <tr><td>Circular wait</td><td>所有資源排順序，只能由小到大要</td><td>要事先排好順序，鎖動態決定時不一定守得住</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Avoidance 與 detection 用到的演算法：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>演算法</th><th>用途</th><th>資源 instance</th><th>比較的對象</th><th>判斷結果</th></tr></thead>
+          <tbody>
+            <tr><td>RAG algorithm</td><td>Avoidance</td><td>每種一個</td><td>claim edge 轉成 assignment edge 後有沒有 cycle</td><td>有 cycle 就不給</td></tr>
+            <tr><td>Banker's algorithm</td><td>Avoidance</td><td>每種好幾個</td><td>Need（Max − Allocation）和 Work</td><td>找不到 safe sequence 就不給</td></tr>
+            <tr><td>Wait-for graph</td><td>Detection</td><td>每種一個</td><td>process 之間的等待關係有沒有 cycle</td><td>有 cycle 就是 deadlock</td></tr>
+            <tr><td>Detection algorithm</td><td>Detection</td><td>每種好幾個</td><td>Request（現在要的）和 Work</td><td>最後 Finish 為 false 的 process 就是 deadlock</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="quiz">自我測驗</h2>
+      <details class="quiz">
+        <summary>Q1. Resource-allocation graph 上有 cycle，系統一定 deadlock 嗎？</summary>
+        <p><strong>答案：</strong>不一定。每種資源只有一個 instance 時一定 deadlock；有好幾個 instance 時只是可能 deadlock。</p>
+        <p><strong>原因：</strong>資源有好幾個 instance 時，cycle 外面可能有沒在等東西的 thread 拿著同一種資源，它做完釋放後，cycle 裡在等的人就能拿到，cycle 自然解開。例如 Case 2 裡 T2、T4 不在等任何東西，做完之後 T1、T3 都能拿到資源。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q2. 為什麼「所有資源排順序、只能由小到大要」就不會有 circular wait？</summary>
+        <p><strong>答案：</strong>因為 circular wait 需要順序號碼繞一圈回到自己，排序規則讓這件事不可能。</p>
+        <p><strong>原因：</strong>假設 T0 → T1 → … → Tn → T0 形成循環等待，每個 thread 都拿著前一個資源在要下一個，依規定 F(R0) &lt; F(R1) &lt; … &lt; F(Rn) &lt; F(R0)，推出 F(R0) &lt; F(R0)，矛盾，所以假設不成立。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q3. Unsafe state 一定會 deadlock 嗎？那 avoidance 為什麼要避開所有 unsafe state？</summary>
+        <p><strong>答案：</strong>不一定會 deadlock，但 deadlock 一定在 unsafe state 裡，所以只要一直待在 safe state 就保證不會 deadlock。</p>
+        <p><strong>原因：</strong>safety 檢查假設每個 thread 都會要到 Max，這是最壞情況。實際上 thread 可能不會要那麼多，或先釋放一些資源，所以 unsafe 不代表一定卡死。但 OS 沒辦法預知實際情況，只能保守地避開所有「有可能」卡死的狀態。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q4. 在 banker's algorithm 的例子裡，P4 請求 (3, 3, 0) 時 Available 是 (3, 3, 2)，明明給得起，為什麼要拒絕？</summary>
+        <p><strong>答案：</strong>因為給了之後 Available 變成 (0, 0, 2)，找不到 safe sequence，系統會進入 unsafe state。</p>
+        <p><strong>原因：</strong>banker's algorithm 不只看「現在有沒有庫存」，還要假裝配置後跑 safety algorithm。配置後每個 process 的 Need 都至少有一項大於 (0, 0, 2)，沒有人能保證做完歸還資源，所以這次請求要讓 P4 等，狀態還原。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q5. Detection algorithm 和 banker's 的 safety algorithm 長得很像，差在哪裡？</summary>
+        <p><strong>答案：</strong>detection 比的是 Request（現在正在要的），safety 比的是 Need（未來最多可能要的）；另外 detection 會把手上沒資源的 process 一開始就設成 Finish = true。</p>
+        <p><strong>原因：</strong>avoidance 要預防未來可能出事，所以照最壞情況 Need 去算；detection 只想知道現在是不是已經卡死，所以只看現在的 Request，樂觀假設拿到就能做完。手上沒有資源的 process 不會讓任何人等它，不可能是 deadlock 的一部分。</p>
+      </details>
+      <details class="quiz">
+        <summary>Q6. 用 resource preemption 復原 deadlock 時，為什麼要擔心 starvation？</summary>
+        <p><strong>答案：</strong>因為如果選 victim 只看代價，可能每次都挑同一個 process，它就一直被搶、一直 rollback，永遠做不完。</p>
+        <p><strong>原因：</strong>選 victim 通常挑代價最小的，同一個 process 很可能每次都是代價最小的那個。常見的做法是把被 rollback 的次數也算進代價，被選過越多次越不容易再被選中。</p>
+      </details>
+
+      <h2 id="reading">延伸閱讀</h2>
+      <ul>
+        <li>課本：Silberschatz, Galvin, Gagne，<em>Operating System Concepts</em>，Chapter 8 Deadlocks（Section 8.1 至 8.8）；投影片指定的課後閱讀：P.326 資料庫系統怎麼處理 deadlock、P.344 livelock 和 deadlock 的差異、P.353 至 P.354 動態取得鎖時排序為何不夠、P.366 至 P.367 終止 process 與搶資源要考慮的因素</li>
+        <li>上課投影片：08_OS_Deadlocks（p.1 至 p.44）</li>
+        <li>筆記：這一章還沒有筆記</li>
+      </ul>
+
+      <nav class="pager" id="pager"></nav>
+    </main>
+
+    <aside class="toc" id="toc"></aside>
+  </div>
+
+  <footer class="site-footer">OS Notes · 依照 CLAUDE.md 規則持續擴充</footer>
+  <script src="../assets/glossary.js"></script>
+  <script src="../assets/site.js"></script>
+</body>
+</html>
